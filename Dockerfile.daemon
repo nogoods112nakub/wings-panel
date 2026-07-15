@@ -1,0 +1,39 @@
+# --- Builder Stage ---
+FROM golang:1.25-alpine AS builder
+
+# Install system compilation packages
+RUN apk add --no-cache git gcc musl-dev
+
+WORKDIR /app
+
+# Copy module descriptors
+COPY daemon/go.mod ./
+COPY daemon/go.sum ./
+RUN go mod download
+
+# Copy source code files
+COPY daemon/main.go .
+
+# Compile static Go binary
+RUN CGO_ENABLED=0 GOOS=linux go build -o wings-daemon .
+
+# --- Runner Stage ---
+FROM alpine:latest
+
+# Install certificates, runtime deps, docker CLI, and ttyd
+RUN apk add --no-cache ca-certificates tzdata bash curl \
+    && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community ttyd \
+    && curl -fsSL -o /usr/local/bin/docker "https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz" \
+    && tar xzf /usr/local/bin/docker -C /tmp && mv /tmp/docker/docker /usr/local/bin/docker && rm -rf /tmp/docker \
+    && chmod +x /usr/local/bin/docker
+
+WORKDIR /app
+
+# Copy the compiled executable from the builder stage
+COPY --from=builder /app/wings-daemon /app/wings-daemon
+
+# Expose HTTP port + ttyd port range (7681-7781)
+EXPOSE 8080 7681-7781
+
+# Execute binary
+ENTRYPOINT ["/app/wings-daemon"]

@@ -1,0 +1,24 @@
+FROM node:18-alpine
+
+ARG NEXT_PUBLIC_PANEL_URL=http://localhost:8000
+ENV NEXT_PUBLIC_PANEL_URL=$NEXT_PUBLIC_PANEL_URL
+
+WORKDIR /app
+
+# Copy dependency descriptors
+COPY frontend/package.json ./
+
+# Install packages
+RUN npm install
+
+# Copy application code
+COPY frontend/ .
+
+# Build the Next.js application
+RUN npm run build
+
+# Expose port
+EXPOSE 3000
+
+# Start production server
+CMD ["npm", "run", "start"]
