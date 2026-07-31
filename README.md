@@ -1,6 +1,8 @@
-# Pterodactyl-Inspired Game Server Management Platform
+# Wings Panel
 
-A self-hosted Game Server Management Platform inspired by the Pterodactyl architecture, featuring a Panel (Master), Daemon (Wings), and Next.js Frontend.
+A self-hosted Game Server Management Platform inspired by the Pterodactyl architecture, featuring a Panel (FastAPI), a Daemon (Wings, Go), and a Next.js Frontend.
+
+**Wings Panel × Pterodactyl Panel © 2026 — Not affiliated with Pterodactyl.**
 
 ## Features
 
@@ -12,13 +14,15 @@ A self-hosted Game Server Management Platform inspired by the Pterodactyl archit
 - **File Manager** - Browse, edit, create, delete files on game servers
 - **Resource Monitoring** - Live CPU, memory, and disk usage stats
 - **Allocation System** - Batch IP:port allocation across nodes
+- **Activity Log** - Track recent actions across the panel
+- **API Keys** - Token-based access for external automation
 
 ## Architecture
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │   Frontend   │────▶│    Panel     │────▶│    Daemon    │
-│  (Next.js)   │     │  (FastAPI)   │     │  (FastAPI)   │
+│  (Next.js)   │     │  (FastAPI)   │     │   (Go/Wings) │
 │  port 3000   │     │  port 8000   │     │  port 8080   │
 └──────────────┘     └──────┬───────┘     └──────┬───────┘
                             │                     │
@@ -30,21 +34,34 @@ A self-hosted Game Server Management Platform inspired by the Pterodactyl archit
 
 ## Quick Start
 
-### 1. Set environment variables
+### 1. Run the installer
+
+```bash
+./install.sh
+```
+
+Pick an option from the menu, or use a command directly:
+
+```bash
+./install.sh install       # full stack (db, panel, frontend, daemon)
+./install.sh panel         # panel only (db, panel, frontend)
+./install.sh daemon        # daemon only
+./install.sh update        # rebuild and restart everything
+./install.sh uninstall     # stop and remove all services
+```
+
+The installer detects your OS and will install missing prerequisites
+(Docker, Docker Compose) automatically when you approve.
+
+Set `HOST_SERVERS_DIR` beforehand to change where game server files live:
 
 ```bash
 export HOST_SERVERS_DIR="$(pwd)/servers"
 ```
 
-### 2. Start all services
+### 2. Access the panel
 
-```bash
-docker-compose up --build
-```
-
-### 3. Access the panel
-
-- **Frontend**: http://localhost:3000
+- **Frontend**: http://localhost:3000 (or :3001 when using docker-compose)
 - **Panel API**: http://localhost:8000/docs
 - **Default login**: `admin` / `admin12345`
 
@@ -70,6 +87,7 @@ docker-compose up --build
 | POST | `/api/auth/register` | Create account |
 | POST | `/api/auth/login` | Sign in |
 | GET | `/api/auth/me` | Current user info |
+| POST | `/api/auth/settings` | Update profile/password |
 
 ### Nodes (Admin)
 | Method | Path | Description |
@@ -95,14 +113,40 @@ docker-compose up --build
 | GET | `/api/servers/{id}` | Server details |
 | PATCH | `/api/servers/{id}` | Update server |
 | DELETE | `/api/servers/{id}` | Delete server |
-| POST | `/api/servers/{id}/power?action=` | Power action |
+| POST | `/api/servers/bulk/power` | Bulk power action |
+| POST | `/api/servers/{id}/power` | Power action (start/stop/restart/kill) |
 | GET | `/api/servers/{id}/stats` | Real-time stats |
-| WS | `/ws/servers/{id}/console` | Console WebSocket |
+| POST | `/api/servers/{id}/suspend` | Suspend server |
+| POST | `/api/servers/{id}/unsuspend` | Unsuspend server |
+| POST | `/api/servers/{id}/transfer` | Transfer server |
+| POST | `/api/servers/{id}/reinstall` | Reinstall server |
+| GET | `/api/servers/{id}/console/url` | Get console URL |
+| POST | `/api/servers/{id}/console/start` | Open console (ttyd) |
+| POST | `/api/servers/{id}/console/stop` | Close console (ttyd) |
+| WS | `/api/servers/{uuid}/console` | Console WebSocket (daemon) |
 | GET | `/api/servers/{id}/files/list` | List files |
 | GET | `/api/servers/{id}/files/read` | Read file |
 | POST | `/api/servers/{id}/files/write` | Write file |
 | POST | `/api/servers/{id}/files/folder` | Create folder |
+| POST | `/api/servers/{id}/files/rename` | Rename file/folder |
 | DELETE | `/api/servers/{id}/files/delete` | Delete file |
+
+### System (Admin)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/system/status` | Panel status overview |
+| GET | `/api/system/health` | Health check |
+| GET | `/api/system/nodes-summary` | Per-node resource summary |
+| GET | `/api/system/docker-networks` | List Docker networks |
+| POST | `/api/system/docker-build` | Build a Docker image from a Dockerfile |
+
+### Activity & API Keys
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/activity` | List activity log entries |
+| GET | `/api/keys` | List API keys |
+| POST | `/api/keys` | Create API key |
+| DELETE | `/api/keys/{id}` | Delete API key |
 
 ## Testing with curl
 
@@ -128,9 +172,5 @@ curl -X POST http://localhost:8000/api/allocations \
 curl -X POST http://localhost:8000/api/servers \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Minecraft Server","node_id":1,"primary_allocation_id":1,"docker_image":"ubuntu:20.04","startup_command":"while true; do echo tick; sleep 5; done"}'
+  -d '{"name":"Minecraft Server","node_id":1,"primary_allocation_id":1,"docker_image":"itzg/minecraft-server","startup_command":"java -Xmx1024M -jar server.jar nogui"}'
 ```
-# wings-panel
-# wings-panel
-# wings-panel
-# wings-panel
