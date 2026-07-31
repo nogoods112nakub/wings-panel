@@ -130,3 +130,7 @@ curl -X POST http://localhost:8000/api/servers \
   -H 'Content-Type: application/json' \
   -d '{"name":"Minecraft Server","node_id":1,"primary_allocation_id":1,"docker_image":"ubuntu:20.04","startup_command":"while true; do echo tick; sleep 5; done"}'
 ```
+# wings-panel
+# wings-panel
+# wings-panel
+# wings-panel
