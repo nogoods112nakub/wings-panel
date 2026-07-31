@@ -6,7 +6,8 @@ import {
   Layers, PlusCircle, RotateCw, Power, Trash2, FileText, ChevronRight,
   Plus, RefreshCw, Play, Square, Skull, LogOut, User, Shield,
   Network, Settings, Save, X, CheckCircle, AlertTriangle, Info,
-  Package, Activity, Key, Clock, Archive, Database, Users, Copy
+  Activity, Key, Copy,
+  RotateCcw, PauseCircle, ArrowRight, Bug, Coffee, Users
 } from 'lucide-react'
 
 
@@ -42,63 +43,15 @@ interface NodeSummary {
   node_id: number; node_name: string; total_allocations: number; used_allocations: number; total_servers: number;
 }
 
-interface Nest { id: number; name: string; description?: string }
-
-interface Egg {
-  id: number; nest_id: number; name: string; description?: string;
-  docker_image: string; startup_command: string; install_script?: string;
-  env_variables?: any; icon?: string
-}
-
 interface ActivityLogEntry {
-  id: number; timestamp: string; user_id: number; username?: string;
+  id: number; created_at: string; user_id: number; username?: string;
   server_id?: number; server_name?: string; action: string;
   detail?: string; ip_address?: string
 }
 
 interface ApiKey {
-  id: number; name: string; key?: string; permissions: string[];
-  last_used_at?: string; created_at: string; expires_at?: string
-}
-
-interface Schedule {
-  id: number; server_id: number; name: string; cron: string;
-  is_active: boolean; tasks?: ScheduleTask[]
-}
-
-interface ScheduleTask {
-  id: number; schedule_id: number; action: string;
-  payload?: string; time_offset: number
-}
-
-interface BackupEntry {
-  id: number; server_id: number; name: string; size?: number;
-  created_at: string; is_successful?: boolean
-}
-
-interface DatabaseEntry {
-  id: number; server_id: number; database_name: string;
-  database_user: string; host: string; port: number; created_at: string
-}
-
-interface Subuser {
-  id: number; server_id: number; user_id: number; username: string;
-  permissions: string[]; created_at: string
-}
-
-const describeCron = (cron: string): string => {
-  const parts = cron.trim().split(/\s+/)
-  if (parts.length !== 5) return cron
-  const [min, hour, dom, mon, dow] = parts
-  if (min === '*' && hour === '*') return 'Every minute'
-  if (dom === '*' && mon === '*' && (dow === '*' || dow === '*/1' || dow === '0-6')) {
-    if (min === '0' && hour !== '*') return 'Every hour at :00'
-    if (min !== '*' && hour.includes('*/')) return `Every ${hour.split('/')[1]} hours at :${min.padStart(2, '0')}`
-    if (min !== '*' && hour !== '*') return `Daily at ${hour}:${min.padStart(2, '0')}`
-  }
-  if (dom.includes('*/') && mon === '*') return `Every ${dom.split('/')[1]} days`
-  if (dow.includes('*/')) return `Every ${dow.split('/')[1]} days of the week`
-  return cron
+  id: number; name: string; key?: string; permissions: string;
+  last_used?: string; created_at: string; expires_at?: string
 }
 
 export default function Dashboard() {
@@ -111,12 +64,12 @@ export default function Dashboard() {
   const [authPassword, setAuthPassword] = useState('')
   const [authError, setAuthError] = useState('')
 
-  const [activeTab, setActiveTab] = useState<'servers' | 'nodes' | 'allocations' | 'create-server' | 'system' | 'nests' | 'activity' | 'api-keys' | 'users'>('servers')
+  const [activeTab, setActiveTab] = useState<'servers' | 'nodes' | 'allocations' | 'create-server' | 'system' | 'activity' | 'api-keys' | 'users' | 'settings'>('servers')
   const [nodes, setNodes] = useState<Node[]>([])
   const [servers, setServers] = useState<Server[]>([])
   const [allocations, setAllocations] = useState<Allocation[]>([])
   const [selectedServer, setSelectedServer] = useState<Server | null>(null)
-  const [detailTab, setDetailTab] = useState<'console' | 'files' | 'schedules' | 'backups' | 'databases' | 'users'>('console')
+  const [detailTab, setDetailTab] = useState<'console' | 'files'>('console')
 
   const [stats, setStats] = useState({ cpu: 0, memory: 0, disk: 0, status: 'offline' })
 
@@ -140,6 +93,7 @@ export default function Dashboard() {
   const [formImage, setFormImage] = useState('itzg/minecraft-server')
   const [formNetwork, setFormNetwork] = useState('pterodactyl-net')
   const [formStartup, setFormStartup] = useState('java -Xmx1024M -jar server.jar nogui')
+  const [formStartupAuto, setFormStartupAuto] = useState(true)
   const [formPreset, setFormPreset] = useState('')
   const [dockerNetworks, setDockerNetworks] = useState<{ name: string; id: string; driver: string; scope: string }[]>([])
   const [formUseDockerfile, setFormUseDockerfile] = useState(false)
@@ -151,11 +105,12 @@ export default function Dashboard() {
     { id: 'mc-java', label: 'Minecraft: Java Edition', image: 'itzg/minecraft-server', startup: 'java -Xmx$MEMORY -jar server.jar nogui', memory: 2048, disk: 10240, icon: '⛏', allocPort: 25565 },
     { id: 'mc-bedrock', label: 'Minecraft: Bedrock Edition', image: 'itzg/minecraft-bedrock-server', startup: '', memory: 2048, disk: 10240, icon: '⛏', allocPort: 25535 },
     { id: 'terraria', label: 'Terraria', image: 'ryshe/terraria', startup: '', memory: 1024, disk: 5120, icon: '🌙', allocPort: 7777 },
-    { id: 'cs2', label: 'Counter-Strike 2', image: 'ich777/counterstrike2', startup: '', memory: 4096, disk: 20480, icon: '🔫', allocPort: 27015 },
+    { id: 'cs2', label: 'Counter-Strike 2', image: 'ich777/steamcmd:cs2', startup: '', memory: 4096, disk: 20480, icon: '🔫', allocPort: 27015 },
     { id: 'valheim', label: 'Valheim', image: 'lloesche/valheim-server', startup: '', memory: 2048, disk: 10240, icon: '⚔', allocPort: 2456 },
-    { id: 'gmod', label: "Garry's Mod", image: 'ich777/garrysmod', startup: '', memory: 2048, disk: 10240, icon: '🔧', allocPort: 27020 },
-    { id: 'rust', label: 'Rust', image: 'ich777/rust', startup: '', memory: 8192, disk: 30720, icon: '🪓', allocPort: 28015 },
+    { id: 'gmod', label: "Garry's Mod", image: 'ich777/steamcmd:garrysmod', startup: '', memory: 2048, disk: 10240, icon: '🔧', allocPort: 27020 },
+    { id: 'rust', label: 'Rust', image: 'ich777/steamcmd:rust', startup: '', memory: 8192, disk: 30720, icon: '🪓', allocPort: 28015 },
     { id: 'palworld', label: 'Palworld', image: 'thijsvanloef/palworld-server-docker', startup: '', memory: 8192, disk: 30720, icon: '🦊', allocPort: 8211 },
+    { id: 'velocity', label: 'Velocity Proxy', image: 'wings-panel-velocity', startup: '', memory: 512, disk: 1024, icon: '⚡', allocPort: 25577 },
     { id: 'custom', label: 'Custom Docker Image', image: '', startup: '', memory: 2048, disk: 10240, icon: '🐳', allocPort: 0 },
   ]
 
@@ -176,22 +131,6 @@ export default function Dashboard() {
 
   const [popup, setPopup] = useState<{ open: boolean; type: 'info' | 'success' | 'error' | 'confirm'; title: string; message: string; onConfirm?: () => void }>({ open: false, type: 'info', title: '', message: '' })
   const showPopup = (type: 'info' | 'success' | 'error' | 'confirm', title: string, message: string, onConfirm?: () => void) => setPopup({ open: true, type, title, message, onConfirm })
-
-  const [nests, setNests] = useState<Nest[]>([])
-  const [eggs, setEggs] = useState<Egg[]>([])
-  const [isCreatingNest, setIsCreatingNest] = useState(false)
-  const [nestFormName, setNestFormName] = useState('')
-  const [nestFormDesc, setNestFormDesc] = useState('')
-  const [editingNest, setEditingNest] = useState<Nest | null>(null)
-  const [isAddingEgg, setIsAddingEgg] = useState<number | null>(null)
-  const [editingEgg, setEditingEgg] = useState<Egg | null>(null)
-  const [eggFormName, setEggFormName] = useState('')
-  const [eggFormDesc, setEggFormDesc] = useState('')
-  const [eggFormImage, setEggFormImage] = useState('')
-  const [eggFormStartup, setEggFormStartup] = useState('')
-  const [eggFormInstall, setEggFormInstall] = useState('')
-  const [eggFormEnv, setEggFormEnv] = useState('{}')
-  const [eggFormIcon, setEggFormIcon] = useState('')
 
   const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([])
   const [activityOffset, setActivityOffset] = useState(0)
@@ -216,33 +155,12 @@ export default function Dashboard() {
   const [userEditPass, setUserEditPass] = useState('')
   const [userEditAdmin, setUserEditAdmin] = useState(false)
 
-  const [schedules, setSchedules] = useState<Schedule[]>([])
-  const [isCreatingSchedule, setIsCreatingSchedule] = useState(false)
-  const [schedFormName, setSchedFormName] = useState('')
-  const [schedFormCron, setSchedFormCron] = useState('')
-  const [addingTaskToSchedule, setAddingTaskToSchedule] = useState<number | null>(null)
-  const [taskFormAction, setTaskFormAction] = useState('command')
-  const [taskFormPayload, setTaskFormPayload] = useState('')
-  const [taskFormOffset, setTaskFormOffset] = useState(0)
-
-  const [backups, setBackups] = useState<BackupEntry[]>([])
-  const [isCreatingBackup, setIsCreatingBackup] = useState(false)
-
-  const [databases, setDatabases] = useState<DatabaseEntry[]>([])
-  const [isCreatingDatabase, setIsCreatingDatabase] = useState(false)
-  const [dbFormName, setDbFormName] = useState('')
-  const [dbFormUser, setDbFormUser] = useState('')
-  const [dbFormPass, setDbFormPass] = useState('')
-  const [dbFormHost, setDbFormHost] = useState('127.0.0.1')
-  const [dbFormPort, setDbFormPort] = useState(3306)
-
-  const [subusers, setSubusers] = useState<Subuser[]>([])
-  const [isAddingSubuser, setIsAddingSubuser] = useState(false)
-  const [subuserFormName, setSubuserFormName] = useState('')
-  const [subuserFormPerms, setSubuserFormPerms] = useState<string[]>(['console'])
-  const [editingSubuser, setEditingSubuser] = useState<Subuser | null>(null)
-
-  const [deployEggId, setDeployEggId] = useState<number>(0)
+  const [settingsTab, setSettingsTab] = useState<'profile' | 'security'>('profile')
+  const [settingsEmail, setSettingsEmail] = useState('')
+  const [settingsNewPass, setSettingsNewPass] = useState('')
+  const [settingsConfirmPass, setSettingsConfirmPass] = useState('')
+  const [selectedServerIds, setSelectedServerIds] = useState<number[]>([])
+  const [bulkAction, setBulkAction] = useState('')
 
   const authHeaders = useCallback((): Record<string, string> => token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : {}, [token])
 
@@ -417,7 +335,6 @@ export default function Dashboard() {
     if (!formImage || !formImage.trim()) { showPopup('error', 'Missing Info', 'Docker image is required'); return }
     try {
       const body: any = { name: formName, description: formDesc, node_id: formNodeId, primary_allocation_id: formAllocId || 0, cpu_limit: formCpu, memory_limit: formMemory, disk_limit: formDisk, docker_image: formImage, docker_network: formNetwork, startup_command: formUseDockerfile ? '' : formStartup }
-      if (deployEggId) body.egg_id = deployEggId
       const res = await apiFetch('/api/servers', { method: 'POST', body: JSON.stringify(body) })
       if (res.ok) { fetchAll(); setActiveTab('servers') }
       else { const e = await res.json(); showPopup('error', 'Deploy Failed', e.detail || 'Failed to create server') }
@@ -457,78 +374,6 @@ export default function Dashboard() {
     })
   }
 
-  const fetchNestsAndEggs = async () => {
-    try {
-      const nRes = await apiFetch('/api/nests')
-      if (nRes.ok) setNests(await nRes.json())
-      const eRes = await apiFetch('/api/eggs')
-      if (eRes.ok) setEggs(await eRes.json())
-    } catch {}
-  }
-
-  useEffect(() => { if (activeTab === 'nests') fetchNestsAndEggs() }, [activeTab])
-
-  const createNest = async () => {
-    if (!nestFormName) return
-    try {
-      const res = await apiFetch('/api/nests', { method: 'POST', body: JSON.stringify({ name: nestFormName, description: nestFormDesc }) })
-      if (res.ok) { setIsCreatingNest(false); setNestFormName(''); setNestFormDesc(''); fetchNestsAndEggs() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create nest') }
-    } catch { showPopup('error', 'Error', 'Connection failed') }
-  }
-
-  const updateNest = async (nest: Nest) => {
-    try {
-      const res = await apiFetch(`/api/nests/${nest.id}`, { method: 'PATCH', body: JSON.stringify({ name: nestFormName || nest.name, description: nestFormDesc }) })
-      if (res.ok) { setEditingNest(null); setNestFormName(''); setNestFormDesc(''); fetchNestsAndEggs() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to update nest') }
-    } catch {}
-  }
-
-  const deleteNest = async (nest: Nest) => {
-    showPopup('confirm', 'Delete Nest', `Delete nest "${nest.name}"? All eggs inside will also be deleted.`, async () => {
-      try { const res = await apiFetch(`/api/nests/${nest.id}`, { method: 'DELETE' }); if (res.ok) fetchNestsAndEggs() } catch {}
-    })
-  }
-
-  const resetEggForm = () => { setEggFormName(''); setEggFormDesc(''); setEggFormImage(''); setEggFormStartup(''); setEggFormInstall(''); setEggFormEnv('{}'); setEggFormIcon('') }
-
-  const startEditEgg = (egg: Egg) => {
-    setEditingEgg(egg); setIsAddingEgg(null)
-    setEggFormName(egg.name); setEggFormDesc(egg.description || ''); setEggFormImage(egg.docker_image)
-    setEggFormStartup(egg.startup_command); setEggFormInstall(egg.install_script || '')
-    setEggFormEnv(egg.env_variables ? JSON.stringify(egg.env_variables, null, 2) : '{}'); setEggFormIcon(egg.icon || '')
-  }
-
-  const startEditNest = (nest: Nest) => { setEditingNest(nest); setNestFormName(nest.name); setNestFormDesc(nest.description || '') }
-
-  const createEgg = async (nestId: number) => {
-    if (!eggFormName) return
-    let parsedEnv: any = {}
-    try { parsedEnv = JSON.parse(eggFormEnv) } catch { showPopup('error', 'Error', 'Invalid JSON in environment variables'); return }
-    try {
-      const res = await apiFetch('/api/eggs', { method: 'POST', body: JSON.stringify({ nest_id: nestId, name: eggFormName, description: eggFormDesc, docker_image: eggFormImage, startup_command: eggFormStartup, install_script: eggFormInstall, env_variables: parsedEnv, icon: eggFormIcon }) })
-      if (res.ok) { setIsAddingEgg(null); resetEggForm(); fetchNestsAndEggs() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create egg') }
-    } catch { showPopup('error', 'Error', 'Connection failed') }
-  }
-
-  const updateEgg = async (egg: Egg) => {
-    let parsedEnv: any = {}
-    try { parsedEnv = JSON.parse(eggFormEnv) } catch { showPopup('error', 'Error', 'Invalid JSON in environment variables'); return }
-    try {
-      const res = await apiFetch(`/api/eggs/${egg.id}`, { method: 'PATCH', body: JSON.stringify({ name: eggFormName || egg.name, description: eggFormDesc, docker_image: eggFormImage, startup_command: eggFormStartup, install_script: eggFormInstall, env_variables: parsedEnv, icon: eggFormIcon }) })
-      if (res.ok) { setEditingEgg(null); resetEggForm(); fetchNestsAndEggs() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to update egg') }
-    } catch {}
-  }
-
-  const deleteEgg = async (egg: Egg) => {
-    showPopup('confirm', 'Delete Egg', `Delete egg "${egg.name}"?`, async () => {
-      try { const res = await apiFetch(`/api/eggs/${egg.id}`, { method: 'DELETE' }); if (res.ok) fetchNestsAndEggs() } catch {}
-    })
-  }
-
   const fetchActivity = async (offset = 0) => {
     try {
       let url = `/api/activity?limit=50&offset=${offset}`
@@ -548,7 +393,7 @@ export default function Dashboard() {
 
   const createApiKey = async () => {
     try {
-      const res = await apiFetch('/api/keys', { method: 'POST', body: JSON.stringify({ name: keyFormName, permissions: keyFormPerms, expires_at: keyFormExpiry || undefined }) })
+      const res = await apiFetch('/api/keys', { method: 'POST', body: JSON.stringify({ name: keyFormName, permissions: keyFormPerms.join(','), expires_at: keyFormExpiry || undefined }) })
       if (res.ok) { const data = await res.json(); setNewApiKeyRaw(data.key || data.raw_key || data.token || ''); setIsCreatingKey(false); setKeyFormName(''); setKeyFormPerms(['servers.read']); setKeyFormExpiry(''); fetchApiKeys() }
       else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create key') }
     } catch { showPopup('error', 'Error', 'Connection failed') }
@@ -572,7 +417,7 @@ export default function Dashboard() {
   const createPanelUser = async () => {
     if (!userFormName || !userFormEmail || !userFormPass) { showPopup('error', 'Missing', 'Fill all fields'); return }
     try {
-      const res = await apiFetch('/api/users', { method: 'POST', body: JSON.stringify({ username: userFormName, email: userFormEmail, password: userFormPass }) })
+      const res = await apiFetch('/api/users', { method: 'POST', body: JSON.stringify({ username: userFormName, email: userFormEmail, password: userFormPass, root_admin: userFormAdmin }) })
       if (res.ok) { setIsCreatingUser(false); setUserFormName(''); setUserFormEmail(''); setUserFormPass(''); setUserFormAdmin(false); fetchPanelUsers() }
       else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed') }
     } catch { showPopup('error', 'Error', 'Connection failed') }
@@ -597,123 +442,61 @@ export default function Dashboard() {
 
   const toggleKeyPerm = (perm: string) => { setKeyFormPerms(prev => prev.includes(perm) ? prev.filter(p => p !== perm) : [...prev, perm]) }
 
-  const fetchSchedules = async () => { if (!selectedServer) return; try { const res = await apiFetch(`/api/servers/${selectedServer.id}/schedules`); if (res.ok) setSchedules(await res.json()) } catch {} }
-
-  const createSchedule = async () => {
-    if (!selectedServer || !schedFormName || !schedFormCron) return
+  const saveSettings = async () => {
+    const body: any = {}
+    if (settingsEmail) body.email = settingsEmail
+    if (settingsNewPass) {
+      if (settingsNewPass !== settingsConfirmPass) { showPopup('error', 'Error', 'Passwords do not match'); return }
+      if (settingsNewPass.length < 8) { showPopup('error', 'Error', 'Password must be at least 8 characters'); return }
+      body.password = settingsNewPass
+    }
+    if (!body.email && !body.password) { showPopup('info', 'Nothing to change', 'No changes were made.'); return }
     try {
-      const res = await apiFetch(`/api/servers/${selectedServer.id}/schedules`, { method: 'POST', body: JSON.stringify({ name: schedFormName, cron: schedFormCron }) })
-      if (res.ok) { setIsCreatingSchedule(false); setSchedFormName(''); setSchedFormCron(''); fetchSchedules() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create schedule') }
-    } catch {}
+      const res = await apiFetch('/api/auth/settings', { method: 'PUT', body: JSON.stringify(body) })
+      if (res.ok) { showPopup('success', 'Saved', 'Settings updated successfully.'); setSettingsNewPass(''); setSettingsConfirmPass('') }
+      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to update settings') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
   }
 
-  const toggleSchedule = async (sched: Schedule) => { if (!selectedServer) return; try { await apiFetch(`/api/servers/${selectedServer.id}/schedules/${sched.id}`, { method: 'PATCH', body: JSON.stringify({ is_active: !sched.is_active }) }); fetchSchedules() } catch {} }
-
-  const deleteSchedule = async (sched: Schedule) => {
-    if (!selectedServer) return
-    showPopup('confirm', 'Delete Schedule', `Delete schedule "${sched.name}"?`, async () => {
-      try { const res = await apiFetch(`/api/servers/${selectedServer.id}/schedules/${sched.id}`, { method: 'DELETE' }); if (res.ok) fetchSchedules() } catch {}
+  const reinstallServer = async (srv: Server) => {
+    showPopup('confirm', 'Reinstall Server', `Reinstall "${srv.name}"? This will delete the container and redeploy it.`, async () => {
+      try { const res = await apiFetch(`/api/servers/${srv.id}/reinstall`, { method: 'POST' }); if (res.ok) { showPopup('success', 'Reinstall Started', 'Server is being reinstalled.'); fetchAll() } else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed') } } catch {}
     })
   }
 
-  const createTask = async (scheduleId: number) => {
-    if (!selectedServer) return
-    try {
-      const res = await apiFetch(`/api/servers/${selectedServer.id}/schedules/${scheduleId}/tasks`, { method: 'POST', body: JSON.stringify({ action: taskFormAction, payload: taskFormPayload, time_offset: taskFormOffset }) })
-      if (res.ok) { setAddingTaskToSchedule(null); setTaskFormAction('command'); setTaskFormPayload(''); setTaskFormOffset(0); fetchSchedules() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create task') }
-    } catch {}
-  }
-
-  const deleteTask = async (scheduleId: number, taskId: number) => { if (!selectedServer) return; try { await apiFetch(`/api/servers/${selectedServer.id}/schedules/${scheduleId}/tasks/${taskId}`, { method: 'DELETE' }); fetchSchedules() } catch {} }
-
-  const fetchBackups = async () => { if (!selectedServer) return; try { const res = await apiFetch(`/api/servers/${selectedServer.id}/backups`); if (res.ok) setBackups(await res.json()) } catch {} }
-
-  const createBackup = async () => {
-    if (!selectedServer) return; setIsCreatingBackup(true)
-    try { const res = await apiFetch(`/api/servers/${selectedServer.id}/backups`, { method: 'POST' }); if (res.ok) { showPopup('success', 'Backup Started', 'Server backup has been initiated.'); fetchBackups() } else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create backup') } } catch {}
-    setIsCreatingBackup(false)
-  }
-
-  const deleteBackup = async (backup: BackupEntry) => {
-    if (!selectedServer) return
-    showPopup('confirm', 'Delete Backup', `Delete backup "${backup.name}"?`, async () => {
-      try { const res = await apiFetch(`/api/servers/${selectedServer.id}/backups/${backup.id}`, { method: 'DELETE' }); if (res.ok) fetchBackups() } catch {}
+  const transferServer = async (srv: Server) => {
+    const nodeId = prompt('Enter target Node ID:')
+    if (!nodeId || isNaN(Number(nodeId))) return
+    showPopup('confirm', 'Transfer Server', `Transfer "${srv.name}" to node #${nodeId}?`, async () => {
+      try { const res = await apiFetch(`/api/servers/${srv.id}/transfer`, { method: 'POST', body: JSON.stringify({ node_id: Number(nodeId) }) }); if (res.ok) { showPopup('success', 'Transfer Started', 'Server is being transferred.'); fetchAll() } else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed') } } catch {}
     })
   }
 
-  const restoreBackup = async (backup: BackupEntry) => {
-    if (!selectedServer) return
-    showPopup('confirm', 'Restore Backup', `Restore from backup "${backup.name}"? The server will restart.`, async () => {
-      try { const res = await apiFetch(`/api/servers/${selectedServer.id}/backups/${backup.id}/restore`, { method: 'POST' }); if (res.ok) { showPopup('success', 'Restored', 'Backup restored successfully.'); fetchBackups() } else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Restore failed') } } catch {}
+  const suspendServer = async (srv: Server, suspend: boolean) => {
+    const endpoint = suspend ? 'suspend' : 'unsuspend'
+    showPopup('confirm', suspend ? 'Suspend Server' : 'Unsuspend Server', `${suspend ? 'Suspend' : 'Unsuspend'} "${srv.name}"?`, async () => {
+      try { const res = await apiFetch(`/api/servers/${srv.id}/${endpoint}`, { method: 'POST' }); if (res.ok) { showPopup('success', suspend ? 'Suspended' : 'Unsuspended', `Server ${suspend ? 'suspended' : 'unsuspended'}.`); fetchAll() } else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed') } } catch {}
     })
   }
 
-  const fetchDatabases = async () => { if (!selectedServer) return; try { const res = await apiFetch(`/api/servers/${selectedServer.id}/databases`); if (res.ok) setDatabases(await res.json()) } catch {} }
-
-  const createDatabase = async () => {
-    if (!selectedServer) return
-    try {
-      const res = await apiFetch(`/api/servers/${selectedServer.id}/databases`, { method: 'POST', body: JSON.stringify({ database_name: dbFormName, database_user: dbFormUser, database_password: dbFormPass, host: dbFormHost, port: dbFormPort }) })
-      if (res.ok) { setIsCreatingDatabase(false); setDbFormName(''); setDbFormUser(''); setDbFormPass(''); setDbFormHost('127.0.0.1'); setDbFormPort(3306); fetchDatabases() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create database') }
-    } catch {}
+  const toggleServerSelect = (id: number) => {
+    setSelectedServerIds(prev => prev.includes(id) ? prev.filter(sid => sid !== id) : [...prev, id])
   }
 
-  const deleteDatabase = async (db: DatabaseEntry) => {
-    if (!selectedServer) return
-    showPopup('confirm', 'Delete Database', `Delete database "${db.database_name}"? This cannot be undone.`, async () => {
-      try { const res = await apiFetch(`/api/servers/${selectedServer.id}/databases/${db.id}`, { method: 'DELETE' }); if (res.ok) fetchDatabases() } catch {}
-    })
-  }
-
-  const fetchSubusers = async () => { if (!selectedServer) return; try { const res = await apiFetch(`/api/servers/${selectedServer.id}/subusers`); if (res.ok) setSubusers(await res.json()) } catch {} }
-
-  const toggleSubuserPerm = (perm: string) => { setSubuserFormPerms(prev => prev.includes(perm) ? prev.filter(p => p !== perm) : [...prev, perm]) }
-
-  const addSubuser = async () => {
-    if (!selectedServer || !subuserFormName) return
-    try {
-      const res = await apiFetch(`/api/servers/${selectedServer.id}/subusers`, { method: 'POST', body: JSON.stringify({ username: subuserFormName, permissions: subuserFormPerms }) })
-      if (res.ok) { setIsAddingSubuser(false); setSubuserFormName(''); setSubuserFormPerms(['console']); fetchSubusers() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to add user') }
-    } catch {}
-  }
-
-  const updateSubuser = async (su: Subuser) => {
-    if (!selectedServer) return
-    try {
-      const res = await apiFetch(`/api/servers/${selectedServer.id}/subusers/${su.id}`, { method: 'PATCH', body: JSON.stringify({ permissions: subuserFormPerms }) })
-      if (res.ok) { setEditingSubuser(null); setSubuserFormPerms(['console']); fetchSubusers() }
-      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to update user') }
-    } catch {}
-  }
-
-  const removeSubuser = async (su: Subuser) => {
-    if (!selectedServer) return
-    showPopup('confirm', 'Remove Subuser', `Remove "${su.username}" from this server?`, async () => {
-      try { const res = await apiFetch(`/api/servers/${selectedServer.id}/subusers/${su.id}`, { method: 'DELETE' }); if (res.ok) fetchSubusers() } catch {}
+  const executeBulkAction = async () => {
+    if (!bulkAction || selectedServerIds.length === 0) return
+    showPopup('confirm', 'Bulk Action', `${bulkAction} ${selectedServerIds.length} server(s)?`, async () => {
+      try {
+        const res = await apiFetch('/api/servers/bulk/power', { method: 'POST', body: JSON.stringify({ action: bulkAction, server_ids: selectedServerIds }) })
+        if (res.ok) { showPopup('success', 'Done', `Bulk ${bulkAction} completed.`); setSelectedServerIds([]); fetchAll() }
+        else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed') }
+      } catch { showPopup('error', 'Error', 'Connection failed') }
     })
   }
 
   useEffect(() => {
-    if (activeTab === 'create-server' && eggs.length === 0) { apiFetch('/api/eggs').then(r => { if (r.ok) return r.json() }).then(d => { if (d) setEggs(d) }).catch(() => {}) }
-  }, [activeTab])
-
-  const handleDeployEggSelect = (eggId: number) => {
-    setDeployEggId(eggId)
-    if (eggId === 0) return
-    const egg = eggs.find(e => e.id === eggId)
-    if (egg) { setFormImage(egg.docker_image); setFormStartup(egg.startup_command); setFormPreset('') }
-  }
-
-  useEffect(() => {
     if (!selectedServer) return
-    if (detailTab === 'schedules') fetchSchedules()
-    else if (detailTab === 'backups') fetchBackups()
-    else if (detailTab === 'databases') fetchDatabases()
-    else if (detailTab === 'users') fetchSubusers()
+    if (detailTab === 'console') { /* console handled by websocket */ }
   }, [detailTab, selectedServer])
 
   if (!token || !user) {
@@ -736,6 +519,7 @@ export default function Dashboard() {
           </p>
           {authPage === 'login' && <p style={{ textAlign: 'center', marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Default: admin / admin12345</p>}
         </div>
+        <p style={{ textAlign: 'center', marginTop: '24px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Wings Panel × Pterodactyl Panel &copy; 2026</p>
       </div>
     )
   }
@@ -749,11 +533,11 @@ export default function Dashboard() {
           {user.root_admin && <button onClick={() => { setActiveTab('nodes'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'nodes' ? 'active' : ''}`}><Network size={18} /><span>Nodes</span></button>}
           {user.root_admin && <button onClick={() => { setActiveTab('allocations'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'allocations' ? 'active' : ''}`}><Settings size={18} /><span>Allocations</span></button>}
           {user.root_admin && <button onClick={() => { setActiveTab('system'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'system' ? 'active' : ''}`}><Cpu size={18} /><span>System</span></button>}
-          {user.root_admin && <button onClick={() => { setActiveTab('nests'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'nests' ? 'active' : ''}`}><Package size={18} /><span>Nests & Eggs</span></button>}
           <button onClick={() => { setActiveTab('activity'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'activity' ? 'active' : ''}`}><Activity size={18} /><span>Activity</span></button>
           <button onClick={() => { setActiveTab('api-keys'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'api-keys' ? 'active' : ''}`}><Key size={18} /><span>API Keys</span></button>
           {user.root_admin && <button onClick={() => { setActiveTab('users'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'users' ? 'active' : ''}`}><Users size={18} /><span>Users</span></button>}
           <button onClick={() => { setActiveTab('create-server'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'create-server' ? 'active' : ''}`}><PlusCircle size={18} /><span>Deploy</span></button>
+          <button onClick={() => { setActiveTab('settings'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'settings' ? 'active' : ''}`}><User size={18} /><span>Settings</span></button>
         </nav>
         <div style={{ marginTop: 'auto' }}>
           <div style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.8rem', marginBottom: '8px' }}>
@@ -763,7 +547,14 @@ export default function Dashboard() {
               {user.root_admin && <span style={{ fontSize: '0.7rem', padding: '2px 6px', background: 'rgba(168,85,247,0.15)', color: 'var(--color-secondary)', borderRadius: '4px' }}>ADMIN</span>}
             </div>
           </div>
-          <button onClick={logout} className="nav-link" style={{ width: '100%' }}><LogOut size={18} /><span>Sign Out</span></button>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button onClick={logout} className="nav-link" style={{ flex: 1, justifyContent: 'center', fontSize: '0.75rem' }}><LogOut size={14} /><span>Sign Out</span></button>
+            <button onClick={() => window.open('mailto:wingspanelsupport@gmail.com?subject=Bug Report&body=Describe the bug here...', '_blank')} className="nav-link" style={{ flex: 1, justifyContent: 'center', fontSize: '0.75rem' }} title="Report Bug"><Bug size={14} /><span>Report</span></button>
+            <button onClick={() => window.open('https://ko-fi.com/wingspanel', '_blank')} className="nav-link" style={{ flex: 1, justifyContent: 'center', fontSize: '0.75rem' }} title="Support on Ko-Fi"><Coffee size={14} /><span>Donate</span></button>
+          </div>
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)', fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+            Wings Panel × Pterodactyl Panel &copy; 2026
+          </div>
         </div>
       </aside>
       <main className="main-content">
@@ -772,13 +563,30 @@ export default function Dashboard() {
               <div>
                 <div className="header-wrapper">
                   <div><h1 className="header-title">Servers</h1><p className="header-desc">{servers.length} server{servers.length !== 1 ? 's' : ''} deployed</p></div>
-                  <button onClick={fetchAll} className="btn btn-outline"><RefreshCw size={16} /><span>Refresh</span></button>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <button onClick={fetchAll} className="btn btn-outline"><RefreshCw size={16} /><span>Refresh</span></button>
+                  </div>
                 </div>
+                {selectedServerIds.length > 0 && (
+                  <div className="card" style={{ marginBottom: '20px', border: '1px solid var(--color-primary)', display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 20px' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{selectedServerIds.length} selected</span>
+                    <select className="form-control" value={bulkAction} onChange={e => setBulkAction(e.target.value)} style={{ width: '150px', padding: '6px 10px' }}>
+                      <option value="">Bulk action...</option>
+                      <option value="start">Start All</option>
+                      <option value="stop">Stop All</option>
+                      <option value="restart">Restart All</option>
+                      <option value="kill">Kill All</option>
+                    </select>
+                    <button onClick={executeBulkAction} className="btn btn-primary" disabled={!bulkAction} style={{ padding: '6px 14px' }}><Power size={14} /> Execute</button>
+                    <button onClick={() => setSelectedServerIds([])} className="btn btn-outline" style={{ padding: '6px 14px' }}><X size={14} /> Clear</button>
+                  </div>
+                )}
                 <div className="card-grid">
                   {servers.map(s => (
                     <div key={s.id} className="card">
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <input type="checkbox" checked={selectedServerIds.includes(s.id)} onChange={() => toggleServerSelect(s.id)} style={{ accentColor: 'var(--color-primary)', width: '18px', height: '18px', cursor: 'pointer' }} />
                           <div style={{ padding: '8px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)', borderRadius: '8px' }}><ServerIcon size={20} /></div>
                           <div><h3 style={{ fontSize: '1rem', fontWeight: 600 }}>{s.name}</h3><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.uuid.substring(0, 8)}...</p></div>
                         </div>
@@ -928,106 +736,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {activeTab === 'nests' && (
-              <div>
-                <div className="header-wrapper">
-                  <div><h1 className="header-title">Nests & Eggs</h1><p className="header-desc">{nests.length} nest{nests.length !== 1 ? 's' : ''} &middot; {eggs.length} egg{eggs.length !== 1 ? 's' : ''}</p></div>
-                  <button onClick={() => { setIsCreatingNest(true); setEditingNest(null); setNestFormName(''); setNestFormDesc('') }} className="btn btn-primary"><Plus size={16} /><span>Create Nest</span></button>
-                </div>
-                {isCreatingNest && (
-                  <div className="card" style={{ marginBottom: '24px', border: '1px solid var(--color-primary)' }}>
-                    <h3 style={{ marginBottom: '16px' }}>Create Nest</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                      <div className="form-group"><label className="form-label">Name</label><input className="form-control" value={nestFormName} onChange={e => setNestFormName(e.target.value)} placeholder="Minecraft" /></div>
-                      <div className="form-group"><label className="form-label">Description</label><input className="form-control" value={nestFormDesc} onChange={e => setNestFormDesc(e.target.value)} placeholder="Optional" /></div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
-                      <button onClick={() => setIsCreatingNest(false)} className="btn btn-outline">Cancel</button>
-                      <button onClick={createNest} className="btn btn-primary">Create</button>
-                    </div>
-                  </div>
-                )}
-                {editingNest && (
-                  <div className="card" style={{ marginBottom: '24px', border: '1px solid var(--color-warning)' }}>
-                    <h3 style={{ marginBottom: '16px' }}>Edit Nest</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                      <div className="form-group"><label className="form-label">Name</label><input className="form-control" value={nestFormName} onChange={e => setNestFormName(e.target.value)} /></div>
-                      <div className="form-group"><label className="form-label">Description</label><input className="form-control" value={nestFormDesc} onChange={e => setNestFormDesc(e.target.value)} /></div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
-                      <button onClick={() => setEditingNest(null)} className="btn btn-outline">Cancel</button>
-                      <button onClick={() => updateNest(editingNest)} className="btn btn-primary">Save</button>
-                    </div>
-                  </div>
-                )}
-                {nests.map(nest => (
-                  <div key={nest.id} className="card" style={{ marginBottom: '20px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                      <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{nest.name}</h3>{nest.description && <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '4px' }}>{nest.description}</p>}</div>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button onClick={() => { setIsAddingEgg(nest.id); setEditingEgg(null); resetEggForm() }} className="btn btn-outline" style={{ padding: '6px 12px' }}><Plus size={14} /><span>Add Egg</span></button>
-                        <button onClick={() => startEditNest(nest)} className="btn btn-outline" style={{ padding: '6px 12px' }}><Settings size={14} /></button>
-                        <button onClick={() => deleteNest(nest)} className="btn btn-danger" style={{ padding: '6px 12px' }}><Trash2 size={14} /></button>
-                      </div>
-                    </div>
-                    {isAddingEgg === nest.id && !editingEgg && (
-                      <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
-                        <h4 style={{ marginBottom: '12px' }}>Add Egg to &quot;{nest.name}&quot;</h4>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                          <div className="form-group"><label className="form-label">Name</label><input className="form-control" value={eggFormName} onChange={e => setEggFormName(e.target.value)} placeholder="Paper 1.21" /></div>
-                          <div className="form-group"><label className="form-label">Docker Image</label><input className="form-control" value={eggFormImage} onChange={e => setEggFormImage(e.target.value)} placeholder="itzg/minecraft-server" /></div>
-                          <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Description</label><input className="form-control" value={eggFormDesc} onChange={e => setEggFormDesc(e.target.value)} /></div>
-                          <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Startup Command</label><input className="form-control" value={eggFormStartup} onChange={e => setEggFormStartup(e.target.value)} /></div>
-                          <div className="form-group"><label className="form-label">Icon</label><input className="form-control" value={eggFormIcon} onChange={e => setEggFormIcon(e.target.value)} placeholder="e.g. emoji or URL" /></div>
-                          <div className="form-group"><label className="form-label">Env Variables (JSON)</label><textarea className="form-control" rows={4} value={eggFormEnv} onChange={e => setEggFormEnv(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} placeholder={'{"MEMORY": "1024M"}'} /></div>
-                          <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Install Script</label><textarea className="form-control" rows={6} value={eggFormInstall} onChange={e => setEggFormInstall(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} /></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
-                          <button onClick={() => { setIsAddingEgg(null); resetEggForm() }} className="btn btn-outline">Cancel</button>
-                          <button onClick={() => createEgg(nest.id)} className="btn btn-primary">Create Egg</button>
-                        </div>
-                      </div>
-                    )}
-                    {editingEgg && editingEgg.nest_id === nest.id && (
-                      <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--color-warning)', marginBottom: '16px' }}>
-                        <h4 style={{ marginBottom: '12px' }}>Edit Egg: {editingEgg.name}</h4>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                          <div className="form-group"><label className="form-label">Name</label><input className="form-control" value={eggFormName} onChange={e => setEggFormName(e.target.value)} /></div>
-                          <div className="form-group"><label className="form-label">Docker Image</label><input className="form-control" value={eggFormImage} onChange={e => setEggFormImage(e.target.value)} /></div>
-                          <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Description</label><input className="form-control" value={eggFormDesc} onChange={e => setEggFormDesc(e.target.value)} /></div>
-                          <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Startup Command</label><input className="form-control" value={eggFormStartup} onChange={e => setEggFormStartup(e.target.value)} /></div>
-                          <div className="form-group"><label className="form-label">Icon</label><input className="form-control" value={eggFormIcon} onChange={e => setEggFormIcon(e.target.value)} /></div>
-                          <div className="form-group"><label className="form-label">Env Variables (JSON)</label><textarea className="form-control" rows={4} value={eggFormEnv} onChange={e => setEggFormEnv(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} /></div>
-                          <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Install Script</label><textarea className="form-control" rows={6} value={eggFormInstall} onChange={e => setEggFormInstall(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} /></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
-                          <button onClick={() => { setEditingEgg(null); resetEggForm() }} className="btn btn-outline">Cancel</button>
-                          <button onClick={() => updateEgg(editingEgg)} className="btn btn-primary">Save</button>
-                        </div>
-                      </div>
-                    )}
-                    {eggs.filter(e => e.nest_id === nest.id).length > 0 ? (
-                      <div style={{ display: 'grid', gap: '8px' }}>
-                        {eggs.filter(e => e.nest_id === nest.id).map(egg => (
-                          <div key={egg.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                              {egg.icon ? <span style={{ fontSize: '1.2rem' }}>{egg.icon}</span> : <Package size={18} style={{ color: 'var(--color-secondary)' }} />}
-                              <div><p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{egg.name}</p><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{egg.docker_image || 'No image'}</p></div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <button onClick={() => startEditEgg(egg)} className="btn btn-outline" style={{ padding: '6px 10px' }}><Settings size={14} /></button>
-                              <button onClick={() => deleteEgg(egg)} className="btn btn-danger" style={{ padding: '6px 10px' }}><Trash2 size={14} /></button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '20px' }}>No eggs in this nest</p>)}
-                  </div>
-                ))}
-                {nests.length === 0 && !isCreatingNest && <div className="card" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>No nests yet. Create one to get started.</div>}
-              </div>
-            )}
-
             {activeTab === 'activity' && (
               <div>
                 <div className="header-wrapper">
@@ -1048,7 +756,7 @@ export default function Dashboard() {
                     <tbody>
                       {activityLogs.map(entry => (
                         <tr key={entry.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                          <td style={{ padding: '12px 14px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '—'}</td>
+                          <td style={{ padding: '12px 14px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}</td>
                           <td style={{ padding: '12px 14px' }}>{entry.username || entry.user_id}</td>
                           <td style={{ padding: '12px 14px' }}>{entry.server_name || (entry.server_id ? `#${entry.server_id}` : '—')}</td>
                           <td style={{ padding: '12px 14px' }}><span style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)', fontSize: '0.8rem' }}>{entry.action}</span></td>
@@ -1120,8 +828,8 @@ export default function Dashboard() {
                       {apiKeys.map(key => (
                         <tr key={key.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                           <td style={{ padding: '14px', fontWeight: 600 }}>{key.name}</td>
-                          <td style={{ padding: '14px' }}><div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>{(key.permissions || []).map(p => <span key={p} style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(168,85,247,0.1)', color: 'var(--color-secondary)', fontSize: '0.75rem' }}>{p}</span>)}</div></td>
-                          <td style={{ padding: '14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{key.last_used_at ? new Date(key.last_used_at).toLocaleString() : 'Never'}</td>
+                          <td style={{ padding: '14px' }}><div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>{(key.permissions || '').split(',').filter(Boolean).map(p => <span key={p} style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(168,85,247,0.1)', color: 'var(--color-secondary)', fontSize: '0.75rem' }}>{p}</span>)}</div></td>
+                          <td style={{ padding: '14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{key.last_used ? new Date(key.last_used).toLocaleString() : 'Never'}</td>
                           <td style={{ padding: '14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{key.created_at ? new Date(key.created_at).toLocaleDateString() : '—'}</td>
                           <td style={{ padding: '14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{key.expires_at ? new Date(key.expires_at).toLocaleDateString() : 'Never'}</td>
                           <td style={{ padding: '14px' }}><button onClick={() => deleteApiKey(key)} className="btn btn-danger" style={{ padding: '6px 10px' }}><Trash2 size={14} /></button></td>
@@ -1219,21 +927,10 @@ export default function Dashboard() {
                 <div className="header-wrapper"><div><h1 className="header-title">Deploy Server</h1><p className="header-desc">Spin up a Docker container in seconds</p></div></div>
                 <form onSubmit={handleCreateServer}>
                   <div className="card" style={{ marginBottom: '20px' }}>
-                    <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>1. Choose Egg (Optional)</h3>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Preset Egg</label>
-                      <select className="form-control" value={deployEggId} onChange={e => handleDeployEggSelect(Number(e.target.value))}>
-                        <option value={0}>None — use presets or custom image below</option>
-                        {eggs.map(e => <option key={e.id} value={e.id}>{e.icon ? `${e.icon} ` : ''}{e.name} ({e.docker_image})</option>)}
-                      </select>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>Selecting an egg auto-fills docker image and startup command.</p>
-                    </div>
-                  </div>
-                  <div className="card" style={{ marginBottom: '20px' }}>
-                    <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>2. Choose Image</h3>
+                    <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>1. Choose Image</h3>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px', marginBottom: '20px' }}>
                       {GAME_PRESETS.map(p => (
-                        <div key={p.id} onClick={() => { setFormPreset(p.id); setDeployEggId(0); if (p.id !== 'custom') { setFormImage(p.image); const memStr = `${Math.floor(p.memory / 1024)}G`; setFormStartup(p.startup.replace('$MEMORY', memStr)); setFormMemory(p.memory); setFormDisk(p.disk) } else { setFormImage(''); setFormStartup('') } if (!formName || GAME_PRESETS.some(gp => gp.label === formName)) { setFormName(p.id === 'custom' ? '' : p.label) } }} style={{ padding: '16px', borderRadius: '10px', cursor: 'pointer', border: formPreset === p.id ? '2px solid var(--color-primary)' : '1px solid var(--border-color)', background: formPreset === p.id ? 'rgba(56,189,248,0.08)' : 'rgba(255,255,255,0.02)', transition: 'all 0.15s ease', textAlign: 'center' }}>
+                        <div key={p.id} onClick={() => { setFormPreset(p.id); if (p.id !== 'custom') { setFormImage(p.image); const memStr = `${Math.floor(p.memory / 1024)}G`; setFormStartup(p.startup.replace('$MEMORY', memStr)); setFormMemory(p.memory); setFormDisk(p.disk); setFormStartupAuto(true) } else { setFormImage(''); setFormStartup(''); setFormStartupAuto(false) } if (!formName || GAME_PRESETS.some(gp => gp.label === formName)) { setFormName(p.id === 'custom' ? '' : p.label) } }} style={{ padding: '16px', borderRadius: '10px', cursor: 'pointer', border: formPreset === p.id ? '2px solid var(--color-primary)' : '1px solid var(--border-color)', background: formPreset === p.id ? 'rgba(56,189,248,0.08)' : 'rgba(255,255,255,0.02)', transition: 'all 0.15s ease', textAlign: 'center' }}>
                           <div style={{ fontSize: '1.5rem', marginBottom: '6px' }}>{p.icon}</div>
                           <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)' }}>{p.label}</div>
                         </div>
@@ -1246,7 +943,7 @@ export default function Dashboard() {
                     {!formUseDockerfile ? (
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Docker Image</label>
-                        <input className="form-control" value={formImage} onChange={e => { setFormImage(e.target.value); setFormPreset(''); setDeployEggId(0) }} placeholder="e.g. itzg/minecraft-server" required />
+                        <input className="form-control" value={formImage} onChange={e => { setFormImage(e.target.value); setFormPreset('') }} placeholder="e.g. itzg/minecraft-server" required />
                         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>Enter any public Docker Hub or registry image</p>
                       </div>
                     ) : (<>
@@ -1264,7 +961,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="card" style={{ marginBottom: '20px' }}>
-                    <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>3. Server Details</h3>
+                    <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>2. Server Details</h3>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                       <div className="form-group"><label className="form-label">Server Name</label><input className="form-control" value={formName} onChange={e => setFormName(e.target.value)} required placeholder="My Server" /></div>
                       <div className="form-group"><label className="form-label">Node</label><select className="form-control" value={formNodeId} onChange={e => { const nid = Number(e.target.value); setFormNodeId(nid); setFormAllocId(0) }} required><option value={0}>Select node...</option>{nodes.map(n => <option key={n.id} value={n.id}>{n.name} ({n.fqdn})</option>)}</select></div>
@@ -1272,7 +969,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="card" style={{ marginBottom: '20px' }}>
-                    <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>4. Allocation & Resources</h3>
+                    <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>3. Allocation & Resources</h3>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
                       <div className="form-group"><label className="form-label">Primary Port</label><select className="form-control" value={formAllocId} onChange={e => setFormAllocId(Number(e.target.value))} disabled={formNodeId === 0}><option value={0}>No allocation (all ports)</option>{allocations.filter(a => !a.server_id && a.node_id === formNodeId).map(a => <option key={a.id} value={a.id}>{a.ip_address}:{a.port}</option>)}</select></div>
                       <div className="form-group"><label className="form-label">Memory (MB)</label><input className="form-control" type="number" value={formMemory} onChange={e => setFormMemory(Number(e.target.value))} required min={256} /></div>
@@ -1280,7 +977,7 @@ export default function Dashboard() {
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                       <div className="form-group"><label className="form-label">CPU Limit (%)</label><input className="form-control" type="number" value={formCpu} onChange={e => setFormCpu(Number(e.target.value))} required min={1} max={1000} /></div>
-                      {!formUseDockerfile && <div className="form-group"><label className="form-label">Startup Command</label><input className="form-control" value={formStartup} onChange={e => setFormStartup(e.target.value)} required /></div>}
+                      {!formUseDockerfile && <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Startup Command</label><div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}><label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-muted)' }}><input type="checkbox" checked={formStartupAuto} onChange={e => setFormStartupAuto(e.target.checked)} style={{ accentColor: 'var(--color-primary)' }} />Auto (use command from preset/image)</label>{formStartupAuto && <span style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>locked to preset command</span>}</div><input className="form-control" value={formStartup} onChange={e => setFormStartup(e.target.value)} disabled={formStartupAuto} required style={formStartupAuto ? { opacity: 0.6, cursor: 'not-allowed' } : undefined} /></div>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '16px' }}>
@@ -1291,6 +988,49 @@ export default function Dashboard() {
               </div>
             )}
 {/*_PART2_MARKER_*/}
+            {activeTab === 'settings' && (
+              <div style={{ maxWidth: '600px' }}>
+                <div className="header-wrapper">
+                  <div><h1 className="header-title">Settings</h1><p className="header-desc">Manage your account</p></div>
+                </div>
+                <div className="tabs-container" style={{ marginBottom: '24px' }}>
+                  <button onClick={() => setSettingsTab('profile')} className={`tab-btn ${settingsTab === 'profile' ? 'active' : ''}`}><User size={16} /> Profile</button>
+                  <button onClick={() => setSettingsTab('security')} className={`tab-btn ${settingsTab === 'security' ? 'active' : ''}`}><Shield size={16} /> Security</button>
+                </div>
+                {settingsTab === 'profile' && (
+                  <div className="card">
+                    <h3 style={{ marginBottom: '16px' }}>Profile Information</h3>
+                    <div className="form-group">
+                      <label className="form-label">Username</label>
+                      <input className="form-control" value={user?.username || ''} disabled style={{ opacity: 0.6 }} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Email</label>
+                      <input className="form-control" type="email" value={settingsEmail || user?.email || ''} onChange={e => setSettingsEmail(e.target.value)} placeholder="your@email.com" />
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
+                      <button onClick={saveSettings} className="btn btn-primary"><Save size={16} /> Save Changes</button>
+                    </div>
+                  </div>
+                )}
+                {settingsTab === 'security' && (
+                  <div className="card">
+                    <h3 style={{ marginBottom: '16px' }}>Change Password</h3>
+                    <div className="form-group">
+                      <label className="form-label">New Password</label>
+                      <input className="form-control" type="password" value={settingsNewPass} onChange={e => setSettingsNewPass(e.target.value)} placeholder="min 8 characters" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Confirm Password</label>
+                      <input className="form-control" type="password" value={settingsConfirmPass} onChange={e => setSettingsConfirmPass(e.target.value)} placeholder="Confirm new password" />
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
+                      <button onClick={saveSettings} className="btn btn-primary"><Save size={16} /> Update Password</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 </>) : (<div>
 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
               <button onClick={() => setSelectedServer(null)} className="btn btn-outline" style={{ padding: '8px 12px' }}>&larr; Back</button>
@@ -1304,7 +1044,13 @@ export default function Dashboard() {
                 <button onClick={() => sendPowerAction('kill')} className="btn btn-danger"><Skull size={16} /><span>Kill</span></button>
                 <button onClick={() => sendPowerAction('restart')} className="btn btn-outline"><RotateCw size={16} /><span>Restart</span></button>
               </div>
-              <div style={{ flex: 1, height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
+              <div style={{ height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => reinstallServer(selectedServer)} className="btn btn-outline" style={{ color: 'var(--color-warning)', borderColor: 'rgba(245,158,11,0.2)' }}><RotateCcw size={16} /><span>Reinstall</span></button>
+                {user.root_admin && <button onClick={() => transferServer(selectedServer)} className="btn btn-outline"><ArrowRight size={16} /><span>Transfer</span></button>}
+                {user.root_admin && <button onClick={() => suspendServer(selectedServer, selectedServer.status !== 'suspended')} className="btn btn-outline" style={{ color: 'var(--color-danger)', borderColor: 'rgba(239,68,68,0.2)' }}><PauseCircle size={16} /><span>{selectedServer.status === 'suspended' ? 'Unsuspend' : 'Suspend'}</span></button>}
+              </div>
+              <div style={{ height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
               <div style={{ display: 'flex', gap: '24px' }}>
                 <div><span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>CPU</span><p style={{ fontWeight: 600 }}>{stats.cpu}%</p></div>
                 <div><span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>MEMORY</span><p style={{ fontWeight: 600 }}>{stats.memory} / {selectedServer.memory_limit} MB</p></div>
@@ -1314,10 +1060,6 @@ export default function Dashboard() {
             <div className="tabs-container">
               <button onClick={() => setDetailTab('console')} className={`tab-btn ${detailTab === 'console' ? 'active' : ''}`}><TerminalIcon size={16} /> Console</button>
               <button onClick={() => setDetailTab('files')} className={`tab-btn ${detailTab === 'files' ? 'active' : ''}`}><Folder size={16} /> Files</button>
-              <button onClick={() => setDetailTab('schedules')} className={`tab-btn ${detailTab === 'schedules' ? 'active' : ''}`}><Clock size={16} /> Schedules</button>
-              <button onClick={() => setDetailTab('backups')} className={`tab-btn ${detailTab === 'backups' ? 'active' : ''}`}><Archive size={16} /> Backups</button>
-              <button onClick={() => setDetailTab('databases')} className={`tab-btn ${detailTab === 'databases' ? 'active' : ''}`}><Database size={16} /> Databases</button>
-              <button onClick={() => setDetailTab('users')} className={`tab-btn ${detailTab === 'users' ? 'active' : ''}`}><Users size={16} /> Users</button>
             </div>
 
             {detailTab === 'console' && (
@@ -1411,199 +1153,7 @@ export default function Dashboard() {
                 )}
               </div>
             )}
-
-            {detailTab === 'schedules' && (
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                  <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Schedules</h3>
-                  <button onClick={() => { setIsCreatingSchedule(true); setSchedFormName(''); setSchedFormCron('') }} className="btn btn-primary"><Plus size={16} /><span>Create Schedule</span></button>
-                </div>
-                {isCreatingSchedule && (
-                  <div className="card" style={{ marginBottom: '24px', border: '1px solid var(--color-primary)' }}>
-                    <h3 style={{ marginBottom: '16px' }}>New Schedule</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                      <div className="form-group"><label className="form-label">Name</label><input className="form-control" value={schedFormName} onChange={e => setSchedFormName(e.target.value)} placeholder="Daily Restart" /></div>
-                      <div className="form-group"><label className="form-label">Cron Expression</label><input className="form-control" value={schedFormCron} onChange={e => setSchedFormCron(e.target.value)} placeholder="0 4 * * *" style={{ fontFamily: 'var(--font-mono)' }} /></div>
-                    </div>
-                    {schedFormCron && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '-8px', marginBottom: '12px' }}>Human-readable: {describeCron(schedFormCron)}</p>}
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
-                      <button onClick={() => setIsCreatingSchedule(false)} className="btn btn-outline">Cancel</button>
-                      <button onClick={createSchedule} className="btn btn-primary">Create</button>
-                    </div>
-                  </div>
-                )}
-                {schedules.map(sched => (
-                  <div key={sched.id} className="card" style={{ marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <Clock size={18} style={{ color: 'var(--color-primary)' }} />
-                        <div><p style={{ fontWeight: 600 }}>{sched.name}</p><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{sched.cron} &middot; {describeCron(sched.cron)}</p></div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.85rem' }}><input type="checkbox" checked={sched.is_active} onChange={() => toggleSchedule(sched)} style={{ accentColor: 'var(--color-success)' }} />{sched.is_active ? 'Active' : 'Inactive'}</label>
-                        <button onClick={() => deleteSchedule(sched)} className="btn btn-danger" style={{ padding: '6px 10px' }}><Trash2 size={14} /></button>
-                      </div>
-                    </div>
-                    {sched.tasks && sched.tasks.length > 0 && (
-                      <div style={{ marginBottom: '12px' }}>
-                        {sched.tasks.map(task => (
-                          <div key={task.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid var(--border-color)', marginBottom: '8px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                              <span style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)', fontSize: '0.75rem', textTransform: 'capitalize' }}>{task.action}</span>
-                              <span style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>{task.payload ? (task.payload.length > 60 ? task.payload.substring(0, 60) + '...' : task.payload) : 'No payload'}</span>
-                              {task.time_offset !== 0 && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>+{task.time_offset}s</span>}
-                            </div>
-                            <button onClick={() => deleteTask(sched.id, task.id)} style={{ color: 'var(--color-danger)', opacity: 0.6 }}><Trash2 size={14} /></button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {addingTaskToSchedule === sched.id ? (
-                      <div style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr auto auto', gap: '12px', alignItems: 'end' }}>
-                          <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label">Action</label><select className="form-control" value={taskFormAction} onChange={e => setTaskFormAction(e.target.value)}><option value="command">Command</option><option value="backup">Backup</option><option value="power">Power</option><option value="notify">Notify</option></select></div>
-                          <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label">Payload</label><input className="form-control" value={taskFormPayload} onChange={e => setTaskFormPayload(e.target.value)} /></div>
-                          <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label">Offset (s)</label><input className="form-control" type="number" value={taskFormOffset} onChange={e => setTaskFormOffset(Number(e.target.value))} /></div>
-                          <div style={{ display: 'flex', gap: '8px' }}><button onClick={() => setAddingTaskToSchedule(null)} className="btn btn-outline" style={{ padding: '8px' }}><X size={14} /></button><button onClick={() => createTask(sched.id)} className="btn btn-primary" style={{ padding: '8px' }}><Plus size={14} /></button></div>
-                        </div>
-                      </div>
-                    ) : (
-                      <button onClick={() => { setAddingTaskToSchedule(sched.id); setTaskFormAction('command'); setTaskFormPayload(''); setTaskFormOffset(0) }} className="btn btn-outline" style={{ fontSize: '0.85rem' }}><Plus size={14} /><span>Add Task</span></button>
-                    )}
-                  </div>
-                ))}
-                {schedules.length === 0 && !isCreatingSchedule && <div className="card" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>No schedules configured.</div>}
-              </div>
-            )}
-
-            {detailTab === 'backups' && (
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                  <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Backups</h3>
-                  <button onClick={createBackup} className="btn btn-primary" disabled={isCreatingBackup}><Archive size={16} /><span>{isCreatingBackup ? 'Creating...' : 'Create Backup'}</span></button>
-                </div>
-                <div className="card" style={{ padding: 0 }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                    <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}><th style={{ padding: '14px' }}>Name</th><th style={{ padding: '14px' }}>Size</th><th style={{ padding: '14px' }}>Created</th><th style={{ padding: '14px' }}>Status</th><th style={{ padding: '14px' }}></th></tr></thead>
-                    <tbody>
-                      {backups.map(b => (
-                        <tr key={b.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                          <td style={{ padding: '14px', fontWeight: 600 }}>{b.name}</td>
-                          <td style={{ padding: '14px', color: 'var(--text-muted)' }}>{b.size ? (b.size > 1048576 ? `${(b.size / 1048576).toFixed(1)} MB` : `${(b.size / 1024).toFixed(1)} KB`) : '—'}</td>
-                          <td style={{ padding: '14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{b.created_at ? new Date(b.created_at).toLocaleString() : '—'}</td>
-                          <td style={{ padding: '14px' }}><span className={`status-pill ${b.is_successful !== false ? 'running' : 'stopped'}`}><span className="status-glow"></span>{b.is_successful !== false ? 'Complete' : 'Failed'}</span></td>
-                          <td style={{ padding: '14px' }}><div style={{ display: 'flex', gap: '8px' }}><button onClick={() => restoreBackup(b)} className="btn btn-outline" style={{ padding: '6px 10px' }} title="Restore"><RotateCw size={14} /></button><button onClick={() => deleteBackup(b)} className="btn btn-danger" style={{ padding: '6px 10px' }}><Trash2 size={14} /></button></div></td>
-                        </tr>
-                      ))}
-                      {backups.length === 0 && <tr><td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No backups yet.</td></tr>}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {detailTab === 'databases' && (
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                  <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Databases</h3>
-                  <button onClick={() => { setIsCreatingDatabase(true); setDbFormName(''); setDbFormUser(''); setDbFormPass(''); setDbFormHost('127.0.0.1'); setDbFormPort(3306) }} className="btn btn-primary"><Plus size={16} /><span>Create Database</span></button>
-                </div>
-                {isCreatingDatabase && (
-                  <div className="card" style={{ marginBottom: '24px', border: '1px solid var(--color-primary)' }}>
-                    <h3 style={{ marginBottom: '16px' }}>New Database</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                      <div className="form-group"><label className="form-label">Database Name</label><input className="form-control" value={dbFormName} onChange={e => setDbFormName(e.target.value)} /></div>
-                      <div className="form-group"><label className="form-label">Database User</label><input className="form-control" value={dbFormUser} onChange={e => setDbFormUser(e.target.value)} /></div>
-                      <div className="form-group"><label className="form-label">Password</label><input className="form-control" type="password" value={dbFormPass} onChange={e => setDbFormPass(e.target.value)} /></div>
-                      <div className="form-group"><label className="form-label">Host</label><input className="form-control" value={dbFormHost} onChange={e => setDbFormHost(e.target.value)} /></div>
-                      <div className="form-group"><label className="form-label">Port</label><input className="form-control" type="number" value={dbFormPort} onChange={e => setDbFormPort(Number(e.target.value))} /></div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
-                      <button onClick={() => setIsCreatingDatabase(false)} className="btn btn-outline">Cancel</button>
-                      <button onClick={createDatabase} className="btn btn-primary">Create</button>
-                    </div>
-                  </div>
-                )}
-                <div className="card" style={{ padding: 0 }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                    <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}><th style={{ padding: '14px' }}>Name</th><th style={{ padding: '14px' }}>User</th><th style={{ padding: '14px' }}>Host:Port</th><th style={{ padding: '14px' }}>Created</th><th style={{ padding: '14px' }}></th></tr></thead>
-                    <tbody>
-                      {databases.map(db => (
-                        <tr key={db.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                          <td style={{ padding: '14px', fontWeight: 600 }}>{db.database_name}</td>
-                          <td style={{ padding: '14px' }}>{db.database_user}</td>
-                          <td style={{ padding: '14px', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{db.host}:{db.port}</td>
-                          <td style={{ padding: '14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{db.created_at ? new Date(db.created_at).toLocaleDateString() : '—'}</td>
-                          <td style={{ padding: '14px' }}><button onClick={() => deleteDatabase(db)} className="btn btn-danger" style={{ padding: '6px 10px' }}><Trash2 size={14} /></button></td>
-                        </tr>
-                      ))}
-                      {databases.length === 0 && <tr><td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No databases configured.</td></tr>}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {detailTab === 'users' && (
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                  <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Server Users</h3>
-                  <button onClick={() => { setIsAddingSubuser(true); setEditingSubuser(null); setSubuserFormName(''); setSubuserFormPerms(['console']) }} className="btn btn-primary"><Plus size={16} /><span>Add User</span></button>
-                </div>
-                {isAddingSubuser && (
-                  <div className="card" style={{ marginBottom: '24px', border: '1px solid var(--color-primary)' }}>
-                    <h3 style={{ marginBottom: '16px' }}>Add Subuser</h3>
-                    <div className="form-group"><label className="form-label">Username</label><input className="form-control" value={subuserFormName} onChange={e => setSubuserFormName(e.target.value)} style={{ maxWidth: '400px' }} /></div>
-                    <div className="form-group">
-                      <label className="form-label">Permissions</label>
-                      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                        {['console', 'start', 'stop', 'files', 'databases', 'backups', 'schedules'].map(perm => (
-                          <label key={perm} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.875rem' }}><input type="checkbox" checked={subuserFormPerms.includes(perm)} onChange={() => toggleSubuserPerm(perm)} style={{ accentColor: 'var(--color-primary)' }} />{perm}</label>
-                        ))}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
-                      <button onClick={() => setIsAddingSubuser(false)} className="btn btn-outline">Cancel</button>
-                      <button onClick={addSubuser} className="btn btn-primary">Add</button>
-                    </div>
-                  </div>
-                )}
-                {editingSubuser && (
-                  <div className="card" style={{ marginBottom: '24px', border: '1px solid var(--color-warning)' }}>
-                    <h3 style={{ marginBottom: '16px' }}>Edit User: {editingSubuser.username}</h3>
-                    <div className="form-group">
-                      <label className="form-label">Permissions</label>
-                      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                        {['console', 'start', 'stop', 'files', 'databases', 'backups', 'schedules'].map(perm => (
-                          <label key={perm} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.875rem' }}><input type="checkbox" checked={subuserFormPerms.includes(perm)} onChange={() => toggleSubuserPerm(perm)} style={{ accentColor: 'var(--color-primary)' }} />{perm}</label>
-                        ))}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '16px' }}>
-                      <button onClick={() => setEditingSubuser(null)} className="btn btn-outline">Cancel</button>
-                      <button onClick={() => updateSubuser(editingSubuser)} className="btn btn-primary">Save</button>
-                    </div>
-                  </div>
-                )}
-                <div className="card" style={{ padding: 0 }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                    <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}><th style={{ padding: '14px' }}>Username</th><th style={{ padding: '14px' }}>Permissions</th><th style={{ padding: '14px' }}>Added</th><th style={{ padding: '14px' }}></th></tr></thead>
-                    <tbody>
-                      {subusers.map(su => (
-                        <tr key={su.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                          <td style={{ padding: '14px', fontWeight: 600 }}>{su.username}</td>
-                          <td style={{ padding: '14px' }}><div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>{(su.permissions || []).map(p => <span key={p} style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)', fontSize: '0.75rem' }}>{p}</span>)}</div></td>
-                          <td style={{ padding: '14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{su.created_at ? new Date(su.created_at).toLocaleDateString() : '—'}</td>
-                          <td style={{ padding: '14px' }}><div style={{ display: 'flex', gap: '8px' }}><button onClick={() => { setEditingSubuser(su); setSubuserFormPerms(su.permissions || ['console']); setIsAddingSubuser(false) }} className="btn btn-outline" style={{ padding: '6px 10px' }}><Settings size={14} /></button><button onClick={() => removeSubuser(su)} className="btn btn-danger" style={{ padding: '6px 10px' }}><Trash2 size={14} /></button></div></td>
-                        </tr>
-                      ))}
-                      {subusers.length === 0 && <tr><td colSpan={4} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No subusers configured.</td></tr>}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-</div>)}
+          </div>)}
       </main>
       {popup.open && (
         <div className="popup-overlay" onClick={() => setPopup({ ...popup, open: false })}>
@@ -1616,6 +1166,7 @@ export default function Dashboard() {
             </div>
             <h3 className="popup-title">{popup.title}</h3>
             <p className="popup-message">{popup.message}</p>
+            {popup.type === 'error' && <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px' }}>Report bugs to: wingspanelsupport@gmail.com</p>}
             <div className="popup-actions">
               {popup.type === 'confirm' && (<>
                 <button className="btn btn-outline" onClick={() => setPopup({ ...popup, open: false })}>Cancel</button>

@@ -7,6 +7,7 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=255)
     email: str = Field(..., min_length=5)
     password: str = Field(..., min_length=8)
+    root_admin: Optional[bool] = None
 
 class UserLogin(BaseModel):
     username: str
@@ -95,7 +96,6 @@ class ServerCreate(ServerBase):
     node_id: int
     primary_allocation_id: Optional[int] = 0
     allocation_ids: Optional[List[int]] = Field(default=[])
-    egg_id: Optional[int] = None
 
 class ServerUpdate(BaseModel):
     name: Optional[str] = None
@@ -113,7 +113,6 @@ class ServerResponse(ServerBase):
     owner_id: int
     node_id: int
     primary_allocation_id: Optional[int]
-    egg_id: Optional[int] = None
     status: str
     installed: bool
     created_at: datetime
@@ -165,161 +164,6 @@ class NodeAllocationSummary(BaseModel):
     total_allocations: int = 0
     used_allocations: int = 0
     total_servers: int = 0
-
-# --- Nest Schemas ---
-class NestCreate(BaseModel):
-    name: str = Field(..., max_length=255)
-    description: Optional[str] = None
-
-class NestUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-
-class NestResponse(BaseModel):
-    id: int
-    name: str
-    description: Optional[str] = None
-    created_at: datetime
-    class Config:
-        from_attributes = True
-
-# --- Egg Schemas ---
-class EggCreate(BaseModel):
-    nest_id: int
-    name: str = Field(..., max_length=255)
-    description: Optional[str] = None
-    docker_image: str = "itzg/minecraft-server"
-    startup_command: str = ""
-    install_script: Optional[str] = None
-    env_variables: Optional[str] = None
-    icon: Optional[str] = None
-
-class EggUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    docker_image: Optional[str] = None
-    startup_command: Optional[str] = None
-    install_script: Optional[str] = None
-    env_variables: Optional[str] = None
-    icon: Optional[str] = None
-
-class EggResponse(BaseModel):
-    id: int
-    nest_id: int
-    name: str
-    description: Optional[str] = None
-    docker_image: str
-    startup_command: str
-    install_script: Optional[str] = None
-    env_variables: Optional[str] = None
-    icon: Optional[str] = None
-    created_at: datetime
-    class Config:
-        from_attributes = True
-
-# --- ServerEgg Schemas ---
-class ServerEggResponse(BaseModel):
-    id: int
-    server_id: int
-    egg_id: int
-    env_overrides: Optional[str] = None
-    class Config:
-        from_attributes = True
-
-# --- Subuser Schemas ---
-class SubuserCreate(BaseModel):
-    user_id: int
-    permissions: str = Field(..., description="Comma-separated permissions, e.g. 'console,start,stop'")
-
-class SubuserUpdate(BaseModel):
-    permissions: Optional[str] = None
-
-class SubuserResponse(BaseModel):
-    id: int
-    server_id: int
-    user_id: int
-    permissions: str
-    created_at: datetime
-    username: Optional[str] = None
-    class Config:
-        from_attributes = True
-
-# --- Schedule Schemas ---
-class ScheduleCreate(BaseModel):
-    name: str = Field(..., max_length=255)
-    cron: str = Field(..., max_length=255)
-    is_active: bool = True
-
-class ScheduleUpdate(BaseModel):
-    name: Optional[str] = None
-    cron: Optional[str] = None
-    is_active: Optional[bool] = None
-
-class ScheduledTaskCreate(BaseModel):
-    action: str = Field(..., max_length=255)
-    payload: Optional[str] = None
-    time_offset: int = 0
-    enabled: bool = True
-
-class ScheduledTaskUpdate(BaseModel):
-    action: Optional[str] = None
-    payload: Optional[str] = None
-    time_offset: Optional[int] = None
-    enabled: Optional[bool] = None
-
-class ScheduledTaskResponse(BaseModel):
-    id: int
-    schedule_id: int
-    action: str
-    payload: Optional[str] = None
-    time_offset: int
-    enabled: bool
-    class Config:
-        from_attributes = True
-
-class ScheduleResponse(BaseModel):
-    id: int
-    server_id: int
-    name: str
-    is_active: bool
-    cron: str
-    created_at: datetime
-    tasks: List[ScheduledTaskResponse] = []
-    class Config:
-        from_attributes = True
-
-# --- Backup Schemas ---
-class BackupCreate(BaseModel):
-    name: Optional[str] = None
-
-class BackupResponse(BaseModel):
-    id: int
-    server_id: int
-    name: Optional[str] = None
-    path: str
-    size_bytes: int
-    created_at: datetime
-    class Config:
-        from_attributes = True
-
-# --- Server Database Schemas ---
-class ServerDatabaseCreate(BaseModel):
-    database_name: str = Field(..., max_length=255)
-    database_user: str = Field(..., max_length=255)
-    database_password: str = Field(..., min_length=8)
-    host: str = "127.0.0.1"
-    port: int = 3306
-
-class ServerDatabaseResponse(BaseModel):
-    id: int
-    server_id: int
-    database_name: str
-    database_user: str
-    host: str
-    port: int
-    created_at: datetime
-    class Config:
-        from_attributes = True
 
 # --- Activity Log Schemas ---
 class ActivityLogResponse(BaseModel):

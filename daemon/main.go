@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -362,7 +364,7 @@ func handleConsoleManagement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/console/"), "/")
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/console/"), "/"), "/")
 	if len(parts) < 2 {
 		http.Error(w, "Invalid path", http.StatusNotFound)
 		return
@@ -531,60 +533,40 @@ func handleDockerBuild(w http.ResponseWriter, r *http.Request) {
 }
 
 func createTarContext(dir string) (io.ReadCloser, error) {
-	// Simple tar creator for Dockerfile context
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			pw.CloseWithError(err)
-			return
-		}
-		for _, entry := range entries {
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			// Write a minimal tar header + file content
-			header := make([]byte, 512)
-			name := entry.Name()
-			copy(header, []byte(name))
-			// File mode
-			mode := info.Mode()
-			header[100+108] = byte(mode)
-			header[100+109] = byte(mode >> 8)
-			// File size (big-endian 12-byte octal)
-			size := info.Size()
-			sizeOctal := fmt.Sprintf("%011o", size)
-			copy(header[124:136], []byte(sizeOctal))
-			// Typeflag 0 = regular file
-			header[156] = '0'
-			// Checksum placeholder
-			copy(header[148:156], "        ")
-			// Compute checksum
-			checksum := 0
-			for _, b := range header {
-				checksum += int(b)
-			}
-			checksumOctal := fmt.Sprintf("%06o", checksum)
-			copy(header[148:156], []byte(checksumOctal))
-			pw.Write(header)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
 
-			data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-			if err != nil {
-				continue
-			}
-			pw.Write(data)
-			// Pad to 512-byte block
-			pad := (512 - (size % 512)) % 512
-			if pad > 0 {
-				pw.Write(make([]byte, pad))
-			}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
 		}
-		// Two zero blocks mark end of tar
-		pw.Write(make([]byte, 1024))
-	}()
-	return pr, nil
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		hdr := &tar.Header{
+			Name:     entry.Name(),
+			Size:     info.Size(),
+			Mode:     0644,
+			ModTime:  info.ModTime(),
+			Typeflag: tar.TypeReg,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return nil, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return io.NopCloser(&buf), nil
 }
 
 // handleServers handles bulk / server creation operations
@@ -747,15 +729,15 @@ func createAndStartServer(cli *client.Client, payload ServerInstallPayload) {
 func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 	// Parse UUID
 	// path structure: /api/servers/{uuid}/[action/resources/files...]
-	parts := strings.Split(r.URL.Path, "/")
-	if len(parts) < 4 {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 3 {
 		http.Error(w, "Invalid path", http.StatusNotFound)
 		return
 	}
-	uuid := parts[3]
+	uuid := parts[2]
 	subPath := ""
-	if len(parts) > 4 {
-		subPath = strings.Join(parts[4:], "/")
+	if len(parts) > 3 {
+		subPath = strings.Join(parts[3:], "/")
 	}
 
 	// 1. WebSocket Console Log streaming endpoint
@@ -1266,6 +1248,57 @@ func runExec(cli *client.Client, ctx context.Context, containerName string, cmd 
 	return result.String(), nil
 }
 
+func runExecStdIn(cli *client.Client, ctx context.Context, containerName string, cmd []string, stdinData []byte) (string, error) {
+	execConfig := types.ExecConfig{
+		Cmd:          cmd,
+		AttachStdout: true,
+		AttachStderr: true,
+		AttachStdin:  true,
+	}
+	execID, err := cli.ContainerExecCreate(ctx, containerName, execConfig)
+	if err != nil {
+		return "", err
+	}
+	resp, err := cli.ContainerExecAttach(ctx, execID.ID, types.ExecStartCheck{})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Close()
+
+	if len(stdinData) > 0 {
+		resp.Conn.Write(stdinData)
+		resp.CloseWrite()
+	}
+
+	var result strings.Builder
+	buf := make([]byte, 8192)
+	for {
+		n, readErr := resp.Reader.Read(buf)
+		if n > 0 {
+			data := buf[:n]
+			for len(data) >= 8 {
+				streamType := data[0]
+				size := uint32(data[4])<<24 | uint32(data[5])<<16 | uint32(data[6])<<8 | uint32(data[7])
+				data = data[8:]
+				if int(size) > len(data) {
+					size = uint32(len(data))
+				}
+				if streamType == 1 || streamType == 2 {
+					result.Write(data[:size])
+				}
+				data = data[size:]
+			}
+			if len(data) > 0 {
+				result.Write(data)
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	return result.String(), nil
+}
+
 func listFilesViaDocker(cli *client.Client, ctx context.Context, containerName string, relPath string) ([]map[string]interface{}, error) {
 	absPath := "/data/" + strings.TrimLeft(relPath, "/")
 	// Use ls -la and parse output — works on Alpine/busybox
@@ -1396,99 +1429,96 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 		backupFile := filepath.Join(backupsDir, payload.BackupID+".tar.gz")
 
 		// Create tar.gz of /data via docker exec
-		tarCmd := fmt.Sprintf("tar czf /tmp/backup_%s.tar.gz -C /data .", payload.BackupID)
+		tarCmd := fmt.Sprintf("tar czf /tmp/backup_%s.tar.gz -C /data . 2>/dev/null", payload.BackupID)
 		if _, err := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", tarCmd}); err != nil {
 			http.Error(w, fmt.Sprintf("tar create failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		// Copy tar.gz from container to host via docker cp
-		copyCmd := fmt.Sprintf("cp /tmp/backup_%s.tar.gz /dev/stdout", payload.BackupID)
+		// Copy tar.gz from container to host via docker exec
+		copyCmd := fmt.Sprintf("cat /tmp/backup_%s.tar.gz", payload.BackupID)
 		out, err := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", copyCmd})
 		if err != nil {
 			http.Error(w, fmt.Sprintf("copy failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		// Write to host filesystem
-		if err := os.WriteFile(backupFile, []byte(out), 0644); err != nil {
-			// Fallback: use docker cp approach via container
-			cpExec := fmt.Sprintf("cp /tmp/backup_%s.tar.gz /data/.wings_backups/%s.tar.gz", payload.BackupID, payload.BackupID)
-			if _, err2 := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", cpExec}); err2 != nil {
-				http.Error(w, fmt.Sprintf("write backup failed: %v", err), http.StatusInternalServerError)
-				return
-			}
-			// Get size from container
-			sizeOut, _ := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
-				fmt.Sprintf("stat -c %%s /data/.wings_backups/%s.tar.gz 2>/dev/null || echo 0", payload.BackupID)})
-			var size int64
-			fmt.Sscanf(strings.TrimSpace(sizeOut), "%d", &size)
-
-			// Clean up temp file
-			runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
-				fmt.Sprintf("rm -f /tmp/backup_%s.tar.gz", payload.BackupID)})
-
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":     "success",
-				"backup_id":  payload.BackupID,
-				"size_bytes": size,
-			})
-			return
-		}
-
-		info, _ := os.Stat(backupFile)
-		var size int64
-		if info != nil {
-			size = info.Size()
-		}
+		backupData := []byte(out)
+		writeErr := os.WriteFile(backupFile, backupData, 0644)
 
 		// Clean up temp file in container
 		runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
 			fmt.Sprintf("rm -f /tmp/backup_%s.tar.gz", payload.BackupID)})
 
+		size := int64(len(backupData))
+		if writeErr != nil {
+			// Fallback: keep backup inside container volume
+			cpExec := fmt.Sprintf("cp /tmp/backup_%s.tar.gz /data/.wings_backups/%s.tar.gz", payload.BackupID, payload.BackupID)
+			runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", cpExec})
+			sizeOut, _ := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
+				fmt.Sprintf("stat -c %%s /data/.wings_backups/%s.tar.gz 2>/dev/null || echo 0", payload.BackupID)})
+			fmt.Sscanf(strings.TrimSpace(sizeOut), "%d", &size)
+		}
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":     "success",
 			"backup_id":  payload.BackupID,
 			"size_bytes": size,
+			"path":       backupFile,
 		})
 		return
 	}
 
-	// DELETE /api/servers/{uuid}/backups/{backup_id}
+	// Parse remaining path parts for delete/restore
 	parts := strings.Split(strings.TrimPrefix(subPath, "backups/"), "/")
-	if len(parts) >= 1 && parts[0] != "" && r.Method == http.MethodDelete {
-		backupID := parts[0]
-		backupFile := filepath.Join(backupsDir, backupID+".tar.gz")
-		// Also try in-container path
-		containerBackupPath := fmt.Sprintf("/data/.wings_backups/%s.tar.gz", backupID)
+	if len(parts) < 1 || parts[0] == "" {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
 
+	backupID := parts[0]
+	subAction := ""
+	if len(parts) >= 2 {
+		subAction = parts[1]
+	}
+
+	// DELETE /api/servers/{uuid}/backups/{backup_id}
+	if r.Method == http.MethodDelete && subAction == "" {
+		backupFile := filepath.Join(backupsDir, backupID+".tar.gz")
+		containerBackupPath := fmt.Sprintf("/data/.wings_backups/%s.tar.gz", backupID)
 		os.Remove(backupFile)
 		runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", fmt.Sprintf("rm -f %s", containerBackupPath)})
-
 		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 		return
 	}
 
 	// POST /api/servers/{uuid}/backups/{backup_id}/restore
-	if len(parts) >= 1 && parts[0] != "" && r.Method == http.MethodPost {
-		backupID := parts[0]
-		// Find the backup file
+	if r.Method == http.MethodPost && subAction == "restore" {
 		containerBackupPath := fmt.Sprintf("/data/.wings_backups/%s.tar.gz", backupID)
+		backupFile := filepath.Join(backupsDir, backupID+".tar.gz")
 
-		// Check if backup exists in container
+		// Check if backup exists in container or on host
 		checkOut, _ := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
 			fmt.Sprintf("test -f %s && echo exists || echo missing", containerBackupPath)})
 		if strings.TrimSpace(checkOut) != "exists" {
-			// Try host path
-			backupFile := filepath.Join(backupsDir, backupID+".tar.gz")
 			if _, err := os.Stat(backupFile); os.IsNotExist(err) {
 				http.Error(w, "Backup not found", http.StatusNotFound)
 				return
 			}
+			hostData, err := os.ReadFile(backupFile)
+			if err != nil {
+				http.Error(w, "Failed to read backup file", http.StatusInternalServerError)
+				return
+			}
+			execID, err := runExecStdIn(cli, ctx, containerName, []string{"/bin/sh", "-c",
+				fmt.Sprintf("mkdir -p /data/.wings_backups && cat > %s", containerBackupPath)}, hostData)
+			if err != nil || strings.TrimSpace(execID) == "" {
+				http.Error(w, "Failed to copy backup into container", http.StatusInternalServerError)
+				return
+			}
 		}
 
-		// Restore: extract tar.gz over /data (preserve .wings_backups)
-		restoreCmd := fmt.Sprintf("cd /data && tar xzf %s --exclude='.wings_backups'", containerBackupPath)
+		restoreCmd := fmt.Sprintf("cd /data && tar xzf %s --exclude='.wings_backups' 2>/dev/null", containerBackupPath)
 		if _, err := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", restoreCmd}); err != nil {
 			http.Error(w, fmt.Sprintf("restore failed: %v", err), http.StatusInternalServerError)
 			return

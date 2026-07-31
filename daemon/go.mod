@@ -1,6 +1,6 @@
 module daemon
 
-go 1.25.0
+go 1.26
 
 require (
 	github.com/docker/docker v20.10.27+incompatible

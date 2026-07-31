@@ -1,0 +1,28 @@
+FROM eclipse-temurin:21-jre-alpine
+
+LABEL maintainer="wingspanelsupport@gmail.com"
+
+RUN apk add --no-cache curl
+
+WORKDIR /opt/velocity
+
+ARG VELOCITY_JAR_URL=https://fill-data.papermc.io/v1/objects/8290bd8bb46135ad3b916ceb780bc117fe0c8a603e79016c37a1e74315714f94/velocity-4.1.0-SNAPSHOT-11.jar
+ARG VELOCITY_SHA256=8290bd8bb46135ad3b916ceb780bc117fe0c8a603e79016c37a1e74315714f94
+
+RUN echo "Downloading Velocity from $VELOCITY_JAR_URL" && \
+    curl -fsSL -o velocity.jar "$VELOCITY_JAR_URL" && \
+    echo "$VELOCITY_SHA256  velocity.jar" | sha256sum -c -
+
+RUN addgroup -S velocity && adduser -S velocity -G velocity && \
+    chown -R velocity:velocity /opt/velocity
+
+USER velocity
+
+VOLUME ["/opt/velocity/plugins", "/opt/velocity/config"]
+
+EXPOSE 25577
+
+COPY --chown=velocity:velocity docker-entrypoint.sh /opt/velocity/docker-entrypoint.sh
+RUN chmod +x /opt/velocity/docker-entrypoint.sh
+
+CMD ["/opt/velocity/docker-entrypoint.sh"]

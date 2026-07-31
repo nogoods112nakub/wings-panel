@@ -135,7 +135,6 @@ class ContainerLifecycle:
         container = client.containers.create(
             image=docker_image,
             name=container_name,
-            command=["/bin/bash", "start.sh"],
             environment=environment,
             ports=port_bindings,
             volumes={
@@ -147,10 +146,10 @@ class ContainerLifecycle:
             working_dir="/home/container",
             nano_cpus=nano_cpus,
             mem_limit=mem_limit_bytes,
-            memswap_limit=mem_limit_bytes,  # Disable swap (same limit as memory)
+            memswap_limit=mem_limit_bytes,
             network_mode=DOCKER_NETWORK,
             restart_policy={"Name": "no"},
-            user="1000:1000",  # Non-privileged user inside container for isolation
+            user="1000:1000",
             stdin_open=True,
             tty=True,
             detach=True

@@ -18,7 +18,7 @@ from panel import models, schemas
 
 security = HTTPBearer(auto_error=False)
 
-PANEL_VERSION = "1.0.0"
+PANEL_VERSION = "2.0.0"
 DAEMON_TOKEN = os.getenv("DAEMON_TOKEN", "secure_default_wings_api_key_123456")
 DAEMON_HOST = os.getenv("DAEMON_HOST", "daemon-node")
 DAEMON_PORT = int(os.getenv("DAEMON_PORT", "8080"))
@@ -45,7 +45,7 @@ async def lifespan(app):
 
 app = FastAPI(
     title="Wings Panel — Game Server Management",
-    description="Pterodactyl-inspired panel with PufferPanel-style auto-configuration",
+    description="Self-hosted game server management panel built on Pterodactyl-inspired architecture. Wings Panel × Pterodactyl Panel © 2026.",
     version=PANEL_VERSION,
     lifespan=lifespan
 )
@@ -67,7 +67,6 @@ def run_startup_config():
         node = create_default_node(db)
         if node:
             create_default_allocations(db, node)
-        create_default_templates(db)
     finally:
         db.close()
 
@@ -136,125 +135,6 @@ def create_default_allocations(db: Session, node: models.Node):
                 created += 1
     db.commit()
     print(f"[PANEL] {created} default allocations ready (Minecraft, Terraria, Source, Bedrock)")
-
-
-def create_default_templates(db: Session):
-    nests_data = [
-        {
-            "name": "Minecraft",
-            "description": "Minecraft game servers",
-            "eggs": [
-                {
-                    "name": "Minecraft: Java Edition",
-                    "description": "Minecraft Java Edition server",
-                    "docker_image": "itzg/minecraft-server",
-                    "startup_command": "java -Xms${MEMORY}M -Xmx${MEMORY}M -jar server.jar nogui",
-                    "env_variables": '{"EULA":"TRUE","MEMORY":"2G","SERVER_PORT":"25565"}',
-                    "icon": "https://static.wikia.nocookie.net/minecraft_gamepedia/images/5/5f/Minecraft_Java_Edition_icon.png",
-                },
-                {
-                    "name": "Minecraft: Bedrock",
-                    "description": "Minecraft Bedrock Edition server",
-                    "docker_image": "itzg/minecraft-bedrock-server",
-                    "startup_command": "",
-                    "env_variables": '{"EULA":"TRUE"}',
-                    "icon": "https://static.wikia.nocookie.net/minecraft_gamepedia/images/2/2f/Bedrock_Edition_Icon.png",
-                },
-            ]
-        },
-        {
-            "name": "Source Engine",
-            "description": "Source engine game servers",
-            "eggs": [
-                {
-                    "name": "Counter-Strike 2",
-                    "description": "Counter-Strike 2 dedicated server",
-                    "docker_image": "ich777/counterstrike2",
-                    "startup_command": "",
-                    "env_variables": "{}",
-                    "icon": "https://store.steampowered.com/favicon.ico",
-                },
-                {
-                    "name": "Garry's Mod",
-                    "description": "Garry's Mod dedicated server",
-                    "docker_image": "ich777/garrysmod",
-                    "startup_command": "",
-                    "env_variables": '{"SRCDS_MAXPLAYER":"16","SRCDS_PASSWORD":""}',
-                    "icon": "https://store.steampowered.com/favicon.ico",
-                },
-            ]
-        },
-        {
-            "name": "General",
-            "description": "General purpose game servers",
-            "eggs": [
-                {
-                    "name": "Terraria",
-                    "description": "Terraria dedicated server",
-                    "docker_image": "ryshe/terraria",
-                    "startup_command": "",
-                    "env_variables": '{"WORLD_SIZE":"2","MAX_PLAYERS":"8","PASSWORD":""}',
-                    "icon": "https://store.steampowered.com/favicon.ico",
-                },
-                {
-                    "name": "Valheim",
-                    "description": "Valheim dedicated server",
-                    "docker_image": "lloesche/valheim-server",
-                    "startup_command": "",
-                    "env_variables": '{"SERVER_NAME":"Valheim","WORLD_NAME":"Dedicated","PASSWORD":""}',
-                    "icon": "https://store.steampowered.com/favicon.ico",
-                },
-                {
-                    "name": "Rust",
-                    "description": "Rust dedicated server",
-                    "docker_image": "ich777/rust",
-                    "startup_command": "",
-                    "env_variables": '{"RUST_SERVER_NAME":"My Rust Server","RUST_SERVER_MAXPLAYERS":"50"}',
-                    "icon": "https://store.steampowered.com/favicon.ico",
-                },
-                {
-                    "name": "Palworld",
-                    "description": "Palworld dedicated server",
-                    "docker_image": "thijsvanloef/palworld-server-docker",
-                    "startup_command": "",
-                    "env_variables": '{"PLAYERS":"16","PORT":"8211","QUERY_PORT":"27015"}',
-                    "icon": "",
-                },
-                {
-                    "name": "Custom Docker",
-                    "description": "Custom Docker image server",
-                    "docker_image": "",
-                    "startup_command": "",
-                    "env_variables": "{}",
-                    "icon": "",
-                },
-            ]
-        },
-    ]
-
-    for nest_data in nests_data:
-        existing_nest = db.query(models.Nest).filter(models.Nest.name == nest_data["name"]).first()
-        if existing_nest:
-            continue
-
-        nest = models.Nest(name=nest_data["name"], description=nest_data["description"])
-        db.add(nest)
-        db.flush()
-
-        for egg_data in nest_data["eggs"]:
-            egg = models.Egg(
-                nest_id=nest.id,
-                name=egg_data["name"],
-                description=egg_data["description"],
-                docker_image=egg_data["docker_image"],
-                startup_command=egg_data["startup_command"],
-                env_variables=egg_data["env_variables"],
-                icon=egg_data.get("icon", ""),
-            )
-            db.add(egg)
-
-    db.commit()
-    print("[PANEL] Default nests and eggs seeded")
 
 
 # --- Activity Log Helper ---
@@ -332,14 +212,7 @@ def get_server_or_404(server_id: int, db: Session) -> models.Server:
 
 def check_server_access(user: models.User, srv: models.Server):
     if not user.root_admin and srv.owner_id != user.id:
-        subuser = None
-        if hasattr(srv, 'subusers'):
-            for s in srv.subusers:
-                if s.user_id == user.id:
-                    subuser = s
-                    break
-        if not subuser:
-            raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 # --- System Endpoints ---
@@ -498,6 +371,7 @@ def create_user(body: schemas.UserCreate, db: Session = Depends(get_db), admin: 
         username=body.username,
         email=body.email,
         password_hash=bcrypt.hash(body.password),
+        root_admin=body.root_admin or False,
     )
     db.add(user)
     db.commit()
@@ -683,15 +557,6 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
     docker_image = server.docker_image
     startup_command = server.startup_command or ""
 
-    if server.egg_id:
-        egg = db.query(models.Egg).filter(models.Egg.id == server.egg_id).first()
-        if not egg:
-            raise HTTPException(status_code=404, detail="Egg not found")
-        if not docker_image or not docker_image.strip():
-            docker_image = egg.docker_image
-        if not startup_command.strip():
-            startup_command = egg.startup_command or ""
-
     if not docker_image or not docker_image.strip():
         raise HTTPException(status_code=400, detail="Docker image is required")
 
@@ -725,7 +590,6 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
         docker_image=docker_image,
         docker_network=server.docker_network,
         startup_command=startup_command,
-        egg_id=server.egg_id,
         status="installing"
     )
     db.add(new_server)
@@ -865,25 +729,52 @@ async def _sync_all_server_statuses():
 def list_servers(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     if user.root_admin:
         return db.query(models.Server).all()
-    owned = db.query(models.Server).filter(models.Server.owner_id == user.id).all()
-    subuser_server_ids = [s.server_id for s in db.query(models.Subuser).filter(models.Subuser.user_id == user.id).all()]
-    if subuser_server_ids:
-        subuser_servers = db.query(models.Server).filter(models.Server.id.in_(subuser_server_ids)).all()
-        all_server_ids = set(s.id for s in owned) | set(s.id for s in subuser_servers)
-        return db.query(models.Server).filter(models.Server.id.in_(all_server_ids)).all()
-    return owned
+    return db.query(models.Server).filter(models.Server.owner_id == user.id).all()
+
+
+# --- Bulk Server Power Actions (must be before {server_id} routes) ---
+@app.post("/api/servers/bulk/power")
+async def bulk_power_action(body: dict, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    action = body.get("action", "").lower()
+    if action not in ["start", "stop", "kill", "restart"]:
+        raise HTTPException(status_code=400, detail="Invalid action")
+
+    server_ids = body.get("server_ids", [])
+    if not server_ids:
+        raise HTTPException(status_code=400, detail="No server IDs provided")
+
+    results = []
+    for sid in server_ids:
+        srv = db.query(models.Server).filter(models.Server.id == sid).first()
+        if not srv:
+            results.append({"server_id": sid, "status": "not_found"})
+            continue
+        if not user.root_admin and srv.owner_id != user.id:
+            results.append({"server_id": sid, "status": "access_denied"})
+            continue
+        try:
+            node = srv.node
+            if not node:
+                results.append({"server_id": sid, "status": "no_node"})
+                continue
+            await call_daemon(node, f"/api/servers/{srv.uuid}/power", method="POST", json_data={"action": action})
+            status_map = {"start": "running", "stop": "stopped", "kill": "stopped", "restart": "running"}
+            srv.status = status_map.get(action, srv.status)
+            db.commit()
+            results.append({"server_id": sid, "status": "success"})
+        except Exception as e:
+            results.append({"server_id": sid, "status": "error", "error": str(e)})
+
+    log_activity(db, user_id=user.id, action="server.bulk_power",
+                 detail=f"Bulk {action} on {len(server_ids)} servers")
+
+    return {"results": results}
 
 
 @app.get("/api/servers/{server_id}", response_model=schemas.ServerResponse)
 def get_server(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        is_subuser = db.query(models.Subuser).filter(
-            models.Subuser.server_id == srv.id,
-            models.Subuser.user_id == user.id
-        ).first()
-        if not is_subuser:
-            raise HTTPException(status_code=403, detail="Access denied")
+    check_server_access(user, srv)
     return srv
 
 
@@ -931,6 +822,166 @@ async def send_power_action(server_id: int, action: str, db: Session = Depends(g
         pass
 
     return {"message": f"Power action '{action}' dispatched", "daemon_response": response}
+
+
+# --- Server Transfer (Pterodactyl-style) ---
+@app.post("/api/servers/{server_id}/transfer")
+async def transfer_server(server_id: int, body: dict, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    srv = get_server_or_404(server_id, db)
+    if not user.root_admin:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    target_node_id = body.get("node_id")
+    if not target_node_id:
+        raise HTTPException(status_code=400, detail="target node_id is required")
+
+    target_node = db.query(models.Node).filter(models.Node.id == target_node_id).first()
+    if not target_node:
+        raise HTTPException(status_code=404, detail="Target node not found")
+
+    if target_node.id == srv.node_id:
+        raise HTTPException(status_code=400, detail="Server is already on this node")
+
+    old_node = srv.node
+    old_uuid = srv.uuid
+
+    # Stop and delete container on old node
+    try:
+        await call_daemon(old_node, f"/api/servers/{old_uuid}", method="DELETE")
+    except Exception:
+        pass
+
+    # Update server node
+    srv.node_id = target_node.id
+    srv.status = "installing"
+    srv.installed = False
+    db.commit()
+
+    # Deploy on new node
+    daemon_payload = {
+        "uuid": srv.uuid,
+        "docker_image": srv.docker_image,
+        "docker_network": srv.docker_network,
+        "cpu_limit": srv.cpu_limit,
+        "memory_limit": srv.memory_limit,
+        "disk_limit": srv.disk_limit,
+        "primary_port": 0,
+        "allocations": [],
+        "startup_command": srv.startup_command or "",
+        "host_network": True,
+    }
+
+    try:
+        resp = await call_daemon(target_node, "/api/servers", method="POST", json_data=daemon_payload)
+        srv.status = "installing"
+    except HTTPException as e:
+        srv.status = "install_failed"
+    db.commit()
+
+    log_activity(db, user_id=user.id, server_id=srv.id, action="server.transfer",
+                 detail=f"Server '{srv.name}' transferred from node '{old_node.name}' to '{target_node.name}'")
+
+    asyncio.create_task(_poll_install_complete(srv.id, target_node.id))
+
+    return {"message": f"Server transfer initiated to node '{target_node.name}'"}
+
+
+# --- Server Reinstall ---
+@app.post("/api/servers/{server_id}/reinstall")
+async def reinstall_server(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    srv = get_server_or_404(server_id, db)
+    if not user.root_admin and srv.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    node = srv.node
+    if not node:
+        raise HTTPException(status_code=400, detail="No node assigned")
+
+    # Stop and remove existing container
+    try:
+        await call_daemon(node, f"/api/servers/{srv.uuid}", method="DELETE")
+    except Exception:
+        pass
+
+    # Reset status
+    srv.status = "installing"
+    srv.installed = False
+    db.commit()
+
+    # Redeploy
+    daemon_payload = {
+        "uuid": srv.uuid,
+        "docker_image": srv.docker_image,
+        "docker_network": srv.docker_network,
+        "cpu_limit": srv.cpu_limit,
+        "memory_limit": srv.memory_limit,
+        "disk_limit": srv.disk_limit,
+        "primary_port": 0,
+        "allocations": [],
+        "startup_command": srv.startup_command or "",
+        "host_network": True,
+    }
+
+    try:
+        await call_daemon(node, "/api/servers", method="POST", json_data=daemon_payload)
+    except HTTPException:
+        srv.status = "install_failed"
+    db.commit()
+
+    log_activity(db, user_id=user.id, server_id=srv.id, action="server.reinstall",
+                 detail=f"Server '{srv.name}' reinstall initiated")
+
+    asyncio.create_task(_poll_install_complete(srv.id, node.id))
+
+    return {"message": "Server reinstall initiated"}
+
+
+# --- Server Suspend/Unsuspend ---
+@app.post("/api/servers/{server_id}/suspend")
+async def suspend_server(server_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    srv = get_server_or_404(server_id, db)
+    srv.status = "suspended"
+    db.commit()
+
+    # Stop container if running
+    node = srv.node
+    if node:
+        try:
+            await call_daemon(node, f"/api/servers/{srv.uuid}/power", method="POST", json_data={"action": "stop"})
+        except Exception:
+            pass
+
+    log_activity(db, user_id=admin.id, server_id=srv.id, action="server.suspend",
+                 detail=f"Server '{srv.name}' suspended by admin")
+    return {"message": "Server suspended"}
+
+
+@app.post("/api/servers/{server_id}/unsuspend")
+async def unsuspend_server(server_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    srv = get_server_or_404(server_id, db)
+    srv.status = "stopped"
+    db.commit()
+
+    log_activity(db, user_id=admin.id, server_id=srv.id, action="server.unsuspend",
+                 detail=f"Server '{srv.name}' unsuspended by admin")
+    return {"message": "Server unsuspended"}
+
+
+# --- User Settings (Change Password) ---
+@app.put("/api/auth/settings")
+def update_user_settings(body: dict, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    if "password" in body and body["password"]:
+        if len(body["password"]) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+        user.password_hash = bcrypt.hash(body["password"])
+    if "email" in body and body["email"]:
+        existing = db.query(models.User).filter(models.User.email == body["email"], models.User.id != user.id).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already in use")
+        user.email = body["email"]
+    db.commit()
+    log_activity(db, user_id=user.id, action="user.settings_update", detail="User updated account settings")
+    return {"message": "Settings updated successfully"}
 
 
 @app.delete("/api/servers/{server_id}", status_code=204)
@@ -1059,11 +1110,6 @@ async def get_console_url(server_id: int, db: Session = Depends(get_db), user: m
 @app.websocket("/ws/servers/{server_id}/console")
 async def ws_console_proxy(websocket: WebSocket, server_id: int, token: str = Query(None)):
     print(f"[WS] Console connection attempt for server {server_id}")
-    if not token:
-        print(f"[WS] Missing token")
-        await websocket.accept()
-        await websocket.close(code=4001, reason="Missing token")
-        return
 
     from panel.database import SessionLocal
     db = SessionLocal()
@@ -1074,19 +1120,47 @@ async def ws_console_proxy(websocket: WebSocket, server_id: int, token: str = Qu
             await websocket.close(code=4004, reason="Server not found")
             return
 
-        node = srv.node
-        if token != node.daemon_token:
-            print(f"[WS] Invalid daemon token for server {server_id}")
+        # Authenticate via JWT token
+        if not token:
             await websocket.accept()
-            await websocket.close(code=4001, reason="Invalid token")
+            await websocket.close(code=4001, reason="Missing token")
             return
 
-        print(f"[WS] Token verified for server {server_id}")
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            user_id = payload.get("user_id")
+            if user_id is None:
+                await websocket.accept()
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+        except JWTError:
+            await websocket.accept()
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if not user:
+            await websocket.accept()
+            await websocket.close(code=4001, reason="User not found")
+            return
+
+        # Check server access
+        if not user.root_admin and srv.owner_id != user.id:
+            await websocket.accept()
+            await websocket.close(code=4003, reason="Access denied")
+            return
+
+        print(f"[WS] JWT auth verified for server {server_id} (user {user.username})")
+
+        node = srv.node
+        if not node:
+            await websocket.accept()
+            await websocket.close(code=4002, reason="No node assigned")
+            return
 
         daemon_ws_url = f"ws://{node.fqdn}:{node.daemon_port}/api/servers/{srv.uuid}/console?token={node.daemon_token}"
 
         import websockets as ws_lib
-        import asyncio
 
         try:
             daemon_ws = await ws_lib.connect(daemon_ws_url, open_timeout=5, close_timeout=3)
@@ -1133,539 +1207,6 @@ async def ws_console_proxy(websocket: WebSocket, server_id: int, token: str = Qu
             pass
     finally:
         db.close()
-
-
-# =============================================================================
-# NEST ENDPOINTS (Admin only)
-# =============================================================================
-@app.post("/api/nests", response_model=schemas.NestResponse, status_code=201)
-def create_nest(body: schemas.NestCreate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    nest = models.Nest(**body.model_dump())
-    db.add(nest)
-    db.commit()
-    db.refresh(nest)
-    return nest
-
-
-@app.get("/api/nests", response_model=List[schemas.NestResponse])
-def list_nests(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    return db.query(models.Nest).all()
-
-
-@app.get("/api/nests/{nest_id}")
-def get_nest(nest_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    nest = db.query(models.Nest).filter(models.Nest.id == nest_id).first()
-    if not nest:
-        raise HTTPException(status_code=404, detail="Nest not found")
-    return {
-        "id": nest.id,
-        "name": nest.name,
-        "description": nest.description,
-        "created_at": nest.created_at,
-        "eggs": [schemas.EggResponse.model_validate(e) for e in nest.eggs],
-    }
-
-
-@app.patch("/api/nests/{nest_id}", response_model=schemas.NestResponse)
-def update_nest(nest_id: int, body: schemas.NestUpdate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    nest = db.query(models.Nest).filter(models.Nest.id == nest_id).first()
-    if not nest:
-        raise HTTPException(status_code=404, detail="Nest not found")
-    for key, val in body.model_dump(exclude_unset=True).items():
-        setattr(nest, key, val)
-    db.commit()
-    db.refresh(nest)
-    return nest
-
-
-@app.delete("/api/nests/{nest_id}", status_code=204)
-def delete_nest(nest_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    nest = db.query(models.Nest).filter(models.Nest.id == nest_id).first()
-    if not nest:
-        raise HTTPException(status_code=404, detail="Nest not found")
-    if nest.eggs:
-        egg_ids = [e.id for e in nest.eggs]
-        servers_with_eggs = db.query(models.Server).filter(models.Server.egg_id.in_(egg_ids)).count()
-        if servers_with_eggs > 0:
-            raise HTTPException(status_code=400, detail="Cannot delete nest with eggs in use by servers")
-    db.delete(nest)
-    db.commit()
-    return None
-
-
-# =============================================================================
-# EGG ENDPOINTS (Admin only)
-# =============================================================================
-@app.post("/api/eggs", response_model=schemas.EggResponse, status_code=201)
-def create_egg(body: schemas.EggCreate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    nest = db.query(models.Nest).filter(models.Nest.id == body.nest_id).first()
-    if not nest:
-        raise HTTPException(status_code=404, detail="Nest not found")
-    egg = models.Egg(**body.model_dump())
-    db.add(egg)
-    db.commit()
-    db.refresh(egg)
-    return egg
-
-
-@app.get("/api/eggs", response_model=List[schemas.EggResponse])
-def list_eggs(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    return db.query(models.Egg).all()
-
-
-@app.get("/api/eggs/{egg_id}", response_model=schemas.EggResponse)
-def get_egg(egg_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    egg = db.query(models.Egg).filter(models.Egg.id == egg_id).first()
-    if not egg:
-        raise HTTPException(status_code=404, detail="Egg not found")
-    return egg
-
-
-@app.patch("/api/eggs/{egg_id}", response_model=schemas.EggResponse)
-def update_egg(egg_id: int, body: schemas.EggUpdate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    egg = db.query(models.Egg).filter(models.Egg.id == egg_id).first()
-    if not egg:
-        raise HTTPException(status_code=404, detail="Egg not found")
-    for key, val in body.model_dump(exclude_unset=True).items():
-        setattr(egg, key, val)
-    db.commit()
-    db.refresh(egg)
-    return egg
-
-
-@app.delete("/api/eggs/{egg_id}", status_code=204)
-def delete_egg(egg_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    egg = db.query(models.Egg).filter(models.Egg.id == egg_id).first()
-    if not egg:
-        raise HTTPException(status_code=404, detail="Egg not found")
-    servers_count = db.query(models.Server).filter(models.Server.egg_id == egg.id).count()
-    if servers_count > 0:
-        raise HTTPException(status_code=400, detail="Cannot delete egg in use by servers")
-    db.delete(egg)
-    db.commit()
-    return None
-
-
-# =============================================================================
-# SUBUSER ENDPOINTS
-# =============================================================================
-@app.post("/api/servers/{server_id}/subusers", response_model=schemas.SubuserResponse, status_code=201)
-def add_subuser(server_id: int, body: schemas.SubuserCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Only server owner or admin can manage subusers")
-
-    target_user = db.query(models.User).filter(models.User.id == body.user_id).first()
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if target_user.id == user.id:
-        raise HTTPException(status_code=400, detail="Cannot add yourself as a subuser")
-
-    existing = db.query(models.Subuser).filter(
-        models.Subuser.server_id == srv.id,
-        models.Subuser.user_id == body.user_id
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="User is already a subuser of this server")
-
-    subuser = models.Subuser(
-        server_id=srv.id,
-        user_id=body.user_id,
-        permissions=body.permissions,
-    )
-    db.add(subuser)
-    db.commit()
-    db.refresh(subuser)
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="subuser.add", detail=f"Subuser added: user_id={body.user_id}, perms={body.permissions}")
-
-    result = schemas.SubuserResponse.model_validate(subuser)
-    result.username = target_user.username
-    return result
-
-
-@app.get("/api/servers/{server_id}/subusers", response_model=List[schemas.SubuserResponse])
-def list_subusers(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Only server owner or admin can view subusers")
-
-    subusers = db.query(models.Subuser).filter(models.Subuser.server_id == srv.id).all()
-    result = []
-    for s in subusers:
-        resp = schemas.SubuserResponse.model_validate(s)
-        u = db.query(models.User).filter(models.User.id == s.user_id).first()
-        if u:
-            resp.username = u.username
-        result.append(resp)
-    return result
-
-
-@app.patch("/api/servers/{server_id}/subusers/{subuser_id}", response_model=schemas.SubuserResponse)
-def update_subuser(server_id: int, subuser_id: int, body: schemas.SubuserUpdate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Only server owner or admin can manage subusers")
-
-    subuser = db.query(models.Subuser).filter(
-        models.Subuser.id == subuser_id,
-        models.Subuser.server_id == srv.id
-    ).first()
-    if not subuser:
-        raise HTTPException(status_code=404, detail="Subuser not found")
-
-    if body.permissions is not None:
-        subuser.permissions = body.permissions
-    db.commit()
-    db.refresh(subuser)
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="subuser.update", detail=f"Subuser {subuser_id} permissions updated")
-
-    target_user = db.query(models.User).filter(models.User.id == subuser.user_id).first()
-    resp = schemas.SubuserResponse.model_validate(subuser)
-    if target_user:
-        resp.username = target_user.username
-    return resp
-
-
-@app.delete("/api/servers/{server_id}/subusers/{subuser_id}", status_code=204)
-def remove_subuser(server_id: int, subuser_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Only server owner or admin can manage subusers")
-
-    subuser = db.query(models.Subuser).filter(
-        models.Subuser.id == subuser_id,
-        models.Subuser.server_id == srv.id
-    ).first()
-    if not subuser:
-        raise HTTPException(status_code=404, detail="Subuser not found")
-
-    removed_user_id = subuser.user_id
-    db.delete(subuser)
-    db.commit()
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="subuser.remove", detail=f"Subuser removed: user_id={removed_user_id}")
-
-    return None
-
-
-# =============================================================================
-# SCHEDULE ENDPOINTS
-# =============================================================================
-@app.post("/api/servers/{server_id}/schedules", response_model=schemas.ScheduleResponse, status_code=201)
-def create_schedule(server_id: int, body: schemas.ScheduleCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    schedule = models.Schedule(
-        server_id=srv.id,
-        name=body.name,
-        cron=body.cron,
-        is_active=body.is_active,
-    )
-    db.add(schedule)
-    db.commit()
-    db.refresh(schedule)
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="schedule.create", detail=f"Schedule '{schedule.name}' created (cron: {schedule.cron})")
-
-    return schedule
-
-
-@app.get("/api/servers/{server_id}/schedules", response_model=List[schemas.ScheduleResponse])
-def list_schedules(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
-    return db.query(models.Schedule).filter(models.Schedule.server_id == srv.id).all()
-
-
-@app.get("/api/servers/{server_id}/schedules/{schedule_id}", response_model=schemas.ScheduleResponse)
-def get_schedule(server_id: int, schedule_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
-    schedule = db.query(models.Schedule).filter(
-        models.Schedule.id == schedule_id,
-        models.Schedule.server_id == srv.id
-    ).first()
-    if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-    return schedule
-
-
-@app.patch("/api/servers/{server_id}/schedules/{schedule_id}", response_model=schemas.ScheduleResponse)
-def update_schedule(server_id: int, schedule_id: int, body: schemas.ScheduleUpdate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    schedule = db.query(models.Schedule).filter(
-        models.Schedule.id == schedule_id,
-        models.Schedule.server_id == srv.id
-    ).first()
-    if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-
-    for key, val in body.model_dump(exclude_unset=True).items():
-        setattr(schedule, key, val)
-    db.commit()
-    db.refresh(schedule)
-    return schedule
-
-
-@app.delete("/api/servers/{server_id}/schedules/{schedule_id}", status_code=204)
-def delete_schedule(server_id: int, schedule_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    schedule = db.query(models.Schedule).filter(
-        models.Schedule.id == schedule_id,
-        models.Schedule.server_id == srv.id
-    ).first()
-    if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-
-    db.delete(schedule)
-    db.commit()
-    return None
-
-
-@app.post("/api/servers/{server_id}/schedules/{schedule_id}/tasks", response_model=schemas.ScheduledTaskResponse, status_code=201)
-def add_schedule_task(server_id: int, schedule_id: int, body: schemas.ScheduledTaskCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    schedule = db.query(models.Schedule).filter(
-        models.Schedule.id == schedule_id,
-        models.Schedule.server_id == srv.id
-    ).first()
-    if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-
-    task = models.ScheduledTask(
-        schedule_id=schedule.id,
-        action=body.action,
-        payload=body.payload,
-        time_offset=body.time_offset,
-        enabled=body.enabled,
-    )
-    db.add(task)
-    db.commit()
-    db.refresh(task)
-    return task
-
-
-@app.patch("/api/servers/{server_id}/schedules/{schedule_id}/tasks/{task_id}", response_model=schemas.ScheduledTaskResponse)
-def update_schedule_task(server_id: int, schedule_id: int, task_id: int, body: schemas.ScheduledTaskUpdate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    schedule = db.query(models.Schedule).filter(
-        models.Schedule.id == schedule_id,
-        models.Schedule.server_id == srv.id
-    ).first()
-    if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-
-    task = db.query(models.ScheduledTask).filter(
-        models.ScheduledTask.id == task_id,
-        models.ScheduledTask.schedule_id == schedule.id
-    ).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    for key, val in body.model_dump(exclude_unset=True).items():
-        setattr(task, key, val)
-    db.commit()
-    db.refresh(task)
-    return task
-
-
-@app.delete("/api/servers/{server_id}/schedules/{schedule_id}/tasks/{task_id}", status_code=204)
-def delete_schedule_task(server_id: int, schedule_id: int, task_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    schedule = db.query(models.Schedule).filter(
-        models.Schedule.id == schedule_id,
-        models.Schedule.server_id == srv.id
-    ).first()
-    if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-
-    task = db.query(models.ScheduledTask).filter(
-        models.ScheduledTask.id == task_id,
-        models.ScheduledTask.schedule_id == schedule.id
-    ).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    db.delete(task)
-    db.commit()
-    return None
-
-
-# =============================================================================
-# BACKUP ENDPOINTS
-# =============================================================================
-@app.post("/api/servers/{server_id}/backups", response_model=schemas.BackupResponse, status_code=201)
-async def create_backup(server_id: int, body: schemas.BackupCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    backup_name = body.name or f"backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-    backup_id_str = secrets.token_hex(8)
-
-    backup = models.Backup(
-        server_id=srv.id,
-        name=backup_name,
-        path="",
-        size_bytes=0,
-    )
-    db.add(backup)
-    db.commit()
-    db.refresh(backup)
-
-    node = srv.node
-    if node:
-        try:
-            resp = await call_daemon(node, f"/api/servers/{srv.uuid}/backups", method="POST", json_data={
-                "name": backup_name,
-                "backup_id": str(backup.id),
-            })
-            backup.path = resp.get("path", "")
-            backup.size_bytes = resp.get("size_bytes", 0)
-            db.commit()
-            db.refresh(backup)
-        except HTTPException:
-            pass
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="backup.create", detail=f"Backup '{backup_name}' created")
-
-    return backup
-
-
-@app.get("/api/servers/{server_id}/backups", response_model=List[schemas.BackupResponse])
-def list_backups(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
-    return db.query(models.Backup).filter(models.Backup.server_id == srv.id).order_by(models.Backup.created_at.desc()).all()
-
-
-@app.delete("/api/servers/{server_id}/backups/{backup_id}", status_code=204)
-async def delete_backup(server_id: int, backup_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    backup = db.query(models.Backup).filter(
-        models.Backup.id == backup_id,
-        models.Backup.server_id == srv.id
-    ).first()
-    if not backup:
-        raise HTTPException(status_code=404, detail="Backup not found")
-
-    node = srv.node
-    if node and backup.path:
-        try:
-            await call_daemon(node, f"/api/servers/{srv.uuid}/backups/{backup.id}", method="DELETE")
-        except HTTPException:
-            pass
-
-    db.delete(backup)
-    db.commit()
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="backup.delete", detail=f"Backup '{backup.name}' deleted")
-
-    return None
-
-
-@app.post("/api/servers/{server_id}/backups/{backup_id}/restore")
-async def restore_backup(server_id: int, backup_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    backup = db.query(models.Backup).filter(
-        models.Backup.id == backup_id,
-        models.Backup.server_id == srv.id
-    ).first()
-    if not backup:
-        raise HTTPException(status_code=404, detail="Backup not found")
-
-    node = srv.node
-    if not node:
-        raise HTTPException(status_code=400, detail="No node assigned to server")
-
-    try:
-        resp = await call_daemon(node, f"/api/servers/{srv.uuid}/backups/{backup.id}/restore", method="POST")
-    except HTTPException as e:
-        raise HTTPException(status_code=e.status_code, detail=f"Restore failed: {e.detail}")
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="backup.restore", detail=f"Backup '{backup.name}' restored")
-
-    return {"message": "Backup restore initiated", "daemon_response": resp}
-
-
-# =============================================================================
-# DATABASE ENDPOINTS
-# =============================================================================
-@app.post("/api/servers/{server_id}/databases", response_model=schemas.ServerDatabaseResponse, status_code=201)
-def create_database(server_id: int, body: schemas.ServerDatabaseCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    db_record = models.ServerDatabase(
-        server_id=srv.id,
-        database_name=body.database_name,
-        database_user=body.database_user,
-        database_password=body.database_password,
-        host=body.host,
-        port=body.port,
-    )
-    db.add(db_record)
-    db.commit()
-    db.refresh(db_record)
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="database.create", detail=f"Database '{body.database_name}' created")
-
-    return db_record
-
-
-@app.get("/api/servers/{server_id}/databases", response_model=List[schemas.ServerDatabaseResponse])
-def list_databases(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
-    return db.query(models.ServerDatabase).filter(models.ServerDatabase.server_id == srv.id).all()
-
-
-@app.delete("/api/servers/{server_id}/databases/{database_id}", status_code=204)
-def delete_database(server_id: int, database_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = get_server_or_404(server_id, db)
-    if not user.root_admin and srv.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    db_record = db.query(models.ServerDatabase).filter(
-        models.ServerDatabase.id == database_id,
-        models.ServerDatabase.server_id == srv.id
-    ).first()
-    if not db_record:
-        raise HTTPException(status_code=404, detail="Database not found")
-
-    db_name = db_record.database_name
-    db.delete(db_record)
-    db.commit()
-
-    log_activity(db, user_id=user.id, server_id=srv.id, action="database.delete", detail=f"Database '{db_name}' deleted")
-
-    return None
 
 
 # =============================================================================

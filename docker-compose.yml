@@ -46,7 +46,7 @@ services:
     container_name: panel-frontend
     restart: always
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - NEXT_PUBLIC_PANEL_URL=http://localhost:8000
     depends_on:
@@ -65,16 +65,24 @@ services:
       - DAEMON_TOKEN=secure_default_wings_api_key_123456
       - SERVERS_DIR=/srv/daemon/servers
       - HOST_SERVERS_DIR=/srv/daemon/servers
-      - DOCKER_URL=tcp://host.docker.internal:2375
-      - DOCKER_HOST=tcp://host.docker.internal:2375
+      - DOCKER_URL=unix:///var/run/docker.sock
       - DOCKER_NETWORK=pterodactyl-net
       - SERVER_VOLUME=server-data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - server-data:/srv/daemon/servers
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - db
+
+  velocity:
+    build:
+      context: .
+      dockerfile: Dockerfile.velocity
+    image: wings-panel-velocity
+    container_name: panel-velocity-builder
+    profiles:
+      - build
+    restart: "no"
 
 networks:
   default:

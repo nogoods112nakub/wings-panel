@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.next/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo
+servers/
+*.db
