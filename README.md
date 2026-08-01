@@ -53,6 +53,21 @@ Pick an option from the menu, or use a command directly:
 The installer detects your OS and will install missing prerequisites
 (Docker, Docker Compose) automatically when you approve.
 
+> **Linux only.** The installer supports Linux distributions only (Ubuntu,
+> Debian, Fedora, Arch, Alpine, openSUSE, etc.). macOS and other platforms
+> are not supported.
+
+> **Docker permission denied?** If you see `permission denied ... /var/run/docker.sock`,
+> your user is not in the `docker` group. The installer will detect this and offer to
+> fix it for you (`sudo usermod -aG docker $USER`), then re-run itself under `sudo`.
+> To fix it manually:
+>
+> ```bash
+> sudo usermod -aG docker $USER
+> sudo systemctl start docker
+> # then log out and back in (or run: sudo ./install.sh install)
+> ```
+
 Set `HOST_SERVERS_DIR` beforehand to change where game server files live:
 
 ```bash
@@ -174,4 +189,5 @@ curl -X POST http://localhost:8000/api/servers \
   -H 'Content-Type: application/json' \
   -d '{"name":"Minecraft Server","node_id":1,"primary_allocation_id":1,"docker_image":"itzg/minecraft-server","startup_command":"java -Xmx1024M -jar server.jar nogui"}'
 ```
+# about-no-web
 # about-no-web
