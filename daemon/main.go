@@ -184,7 +184,44 @@ var (
 	upgrader     = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true }, // Allow all origins for simplicity
 	}
+	installsMu sync.Mutex
+	installs   = map[string]chan struct{}{}
 )
+
+// registerInstall marks an install/reinstall goroutine as in-flight for a UUID
+// and returns the function to call when the operation finishes.
+func registerInstall(uuid string) func() {
+	installsMu.Lock()
+	done := make(chan struct{})
+	installs[uuid] = done
+	installsMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			installsMu.Lock()
+			if installs[uuid] == done {
+				delete(installs, uuid)
+			}
+			installsMu.Unlock()
+			close(done)
+		})
+	}
+}
+
+// waitInstallDone blocks until any in-flight install for uuid has finished,
+// so a delete can't orphan the container a reinstall creates concurrently.
+func waitInstallDone(uuid string) {
+	installsMu.Lock()
+	done, ok := installs[uuid]
+	installsMu.Unlock()
+	if !ok {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+	}
+}
 
 // initDockerClient attempts to connect to the Docker daemon with retry logic
 func initDockerClient() error {
@@ -204,10 +241,26 @@ func initDockerClient() error {
 	// Verify connection by pinging
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err = dockerClient.Ping(ctx)
+	ping, err := dockerClient.Ping(ctx)
 	if err != nil {
 		dockerClient = nil
 		return err
+	}
+
+	// The vendored Docker SDK's negotiation only downgrades the client API version
+	// when the server is older. Against newer Docker engines (>= 28) that enforce a
+	// minimum API version, the client can get stuck on its default (1.41) and every
+	// image pull/build is rejected. Pin the exact server API version instead.
+	if ping.APIVersion != "" && ping.APIVersion != dockerClient.ClientVersion() {
+		dockerClient, err = client.NewClientWithOpts(
+			client.WithHost(DockerURL),
+			client.WithVersion(ping.APIVersion),
+		)
+		if err != nil {
+			dockerClient = nil
+			return err
+		}
+		log.Printf("Pinned Docker API client to server version %s.", ping.APIVersion)
 	}
 
 	log.Println("Connected to Docker Daemon successfully.")
@@ -628,6 +681,8 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 }
 
 func createAndStartServer(cli *client.Client, payload ServerInstallPayload) {
+	finish := registerInstall(payload.UUID)
+	defer finish()
 	ctx := context.Background()
 
 	// 1. Pull Image (with retries)
@@ -822,7 +877,7 @@ func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 			case "start":
 				err = cli.ContainerStart(ctx, containerName, types.ContainerStartOptions{})
 			case "stop":
-				dur := 15 * time.Second
+				dur := 5 * time.Second
 				err = cli.ContainerStop(ctx, containerName, &dur)
 			case "kill":
 				err = cli.ContainerKill(ctx, containerName, "SIGKILL")
@@ -1043,6 +1098,10 @@ func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 		cli.VolumeRemove(ctx, volumeName, true)
 		serverRoot, _ := filepath.Abs(filepath.Join(ServersDir, uuid))
 		os.RemoveAll(serverRoot)
+		// A reinstall may be creating the container concurrently; wait for it to
+		// finish, then remove anything it created after our first removal.
+		waitInstallDone(uuid)
+		cli.ContainerRemove(ctx, containerName, types.ContainerRemoveOptions{Force: true})
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -1531,6 +1590,30 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 		return
 	}
 
+	// GET /api/servers/{uuid}/backups — list backups on the host
+	if subPath == "backups" && r.Method == http.MethodGet {
+		entries, _ := os.ReadDir(backupsDir)
+		type backupInfo struct {
+			BackupID string `json:"backup_id"`
+			Name     string `json:"name"`
+			Size     int64  `json:"size"`
+		}
+		list := []backupInfo{}
+		for _, e := range entries {
+			ename := e.Name()
+			if !strings.HasSuffix(ename, ".tar.gz") {
+				continue
+			}
+			var size int64
+			if info, err := e.Info(); err == nil {
+				size = info.Size()
+			}
+			list = append(list, backupInfo{BackupID: strings.TrimSuffix(ename, ".tar.gz"), Name: ename, Size: size})
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"backups": list})
+		return
+	}
+
 	// Parse remaining path parts for delete/restore
 	parts := strings.Split(strings.TrimPrefix(subPath, "backups/"), "/")
 	if len(parts) < 1 || parts[0] == "" {
@@ -1576,9 +1659,9 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 				http.Error(w, "Failed to read backup file", http.StatusInternalServerError)
 				return
 			}
-			execID, err := runExecStdIn(cli, ctx, containerName, []string{"/bin/sh", "-c",
+			_, err = runExecStdIn(cli, ctx, containerName, []string{"/bin/sh", "-c",
 				fmt.Sprintf("mkdir -p %s && cat > %s", shQuote("/data/.wings_backups"), shQuote(containerBackupPath))}, hostData)
-			if err != nil || strings.TrimSpace(execID) == "" {
+			if err != nil {
 				http.Error(w, "Failed to copy backup into container", http.StatusInternalServerError)
 				return
 			}

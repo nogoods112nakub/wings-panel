@@ -230,6 +230,24 @@ preflight() {
         install_compose
     fi
     ok "Docker Compose: $($COMPOSE version 2>/dev/null | head -1)"
+
+    if ! docker info &>/dev/null; then
+        warn "Cannot connect to the Docker daemon (permission denied on /var/run/docker.sock)."
+        if [ "$(id -u)" -eq 0 ]; then
+            fail "Docker socket is not accessible even as root. Make sure the Docker daemon is running: systemctl start docker"
+        fi
+        if groups 2>/dev/null | grep -qw docker; then
+            fail "You are in the 'docker' group but the daemon socket is still blocked. Log out and back in, or start the daemon: sudo systemctl start docker"
+        fi
+        if confirm "Add user '$USER' to the 'docker' group so Docker works without sudo?"; then
+            as_root usermod -aG docker "$USER" \
+                || fail "Could not add '$USER' to the docker group."
+            warn "'$USER' was added to the 'docker' group. A re-login is normally required."
+            warn "Re-running the installer under sudo so the current session can access Docker now."
+            exec sudo "$0" "$@"
+        fi
+        fail "Docker requires root access. Add yourself to the docker group (sudo usermod -aG docker \$USER, then log out/in) or run: sudo ./install.sh"
+    fi
 }
 
 setup_env() {
@@ -245,11 +263,15 @@ setup_env() {
 }
 
 create_network() {
-    if ! docker network inspect pterodactyl-net &>/dev/null; then
-        info "Creating Docker network: pterodactyl-net"
-        docker network create pterodactyl-net 2>/dev/null || true
+    if docker network inspect pterodactyl-net &>/dev/null; then
+        local _lbl
+        _lbl="$(docker network inspect pterodactyl-net --format '{{ index .Labels "com.docker.compose.network" }}' 2>/dev/null || true)"
+        if [ -z "$_lbl" ]; then
+            warn "Existing 'pterodactyl-net' has no Compose labels; removing it so Compose can create it correctly."
+            docker network rm pterodactyl-net 2>/dev/null || fail "Could not remove stale network pterodactyl-net. Remove it manually: docker network rm pterodactyl-net"
+        fi
     fi
-    ok "Docker network: pterodactyl-net"
+    ok "Docker network: pterodactyl-net (created by Compose)"
 }
 
 stop_all() {

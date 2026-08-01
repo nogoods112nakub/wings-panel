@@ -7,7 +7,7 @@ import {
   Plus, RefreshCw, Play, Square, Skull, LogOut, User, Shield,
   Network, Settings, Save, X, CheckCircle, AlertTriangle, Info,
   Activity, Key, Copy,
-  RotateCcw, PauseCircle, ArrowRight, Bug, Coffee, Users
+  RotateCcw, PauseCircle, ArrowRight, Bug, Coffee, Users, Sparkles
 } from 'lucide-react'
 
 
@@ -374,6 +374,14 @@ export default function Dashboard() {
     })
   }
 
+  const deployDemoServer = async () => {
+    try {
+      const res = await apiFetch('/api/servers/demo', { method: 'POST' })
+      if (res.ok) { showPopup('success', 'Demo Deploying', 'Your demo server is being created. It will appear here shortly.'); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Demo Failed', e.detail || 'Failed to create demo server') }
+    } catch { showPopup('error', 'Connection Error', 'Cannot reach panel API') }
+  }
+
   const fetchActivity = async (offset = 0) => {
     try {
       let url = `/api/activity?limit=50&offset=${offset}`
@@ -539,25 +547,26 @@ export default function Dashboard() {
           <button onClick={() => { setActiveTab('create-server'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'create-server' ? 'active' : ''}`}><PlusCircle size={18} /><span>Deploy</span></button>
           <button onClick={() => { setActiveTab('settings'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'settings' ? 'active' : ''}`}><User size={18} /><span>Settings</span></button>
         </nav>
-        <div style={{ marginTop: 'auto' }}>
-          <div style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.8rem', marginBottom: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Shield size={14} style={{ color: 'var(--color-primary)' }} />
-              <span>{user.username}</span>
-              {user.root_admin && <span style={{ fontSize: '0.7rem', padding: '2px 6px', background: 'rgba(168,85,247,0.15)', color: 'var(--color-secondary)', borderRadius: '4px' }}>ADMIN</span>}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '4px' }}>
-            <button onClick={logout} className="nav-link" style={{ flex: 1, justifyContent: 'center', fontSize: '0.75rem' }}><LogOut size={14} /><span>Sign Out</span></button>
-            <button onClick={() => window.open('mailto:wingspanelsupport@gmail.com?subject=Bug Report&body=Describe the bug here...', '_blank')} className="nav-link" style={{ flex: 1, justifyContent: 'center', fontSize: '0.75rem' }} title="Report Bug"><Bug size={14} /><span>Report</span></button>
-            <button onClick={() => window.open('https://ko-fi.com/wingspanel', '_blank')} className="nav-link" style={{ flex: 1, justifyContent: 'center', fontSize: '0.75rem' }} title="Support on Ko-Fi"><Coffee size={14} /><span>Donate</span></button>
-          </div>
-          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)', fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-            Wings Panel × Pterodactyl Panel &copy; 2026
-          </div>
-        </div>
       </aside>
       <main className="main-content">
+        <header className="topbar">
+          <div className="topbar-left">
+            <Layers size={16} style={{ color: 'var(--color-primary)' }} />
+            <span className="topbar-brand">WINGS PANEL</span>
+            <span className="topbar-tag">× Pterodactyl Panel &copy; 2026</span>
+          </div>
+          <div className="topbar-right">
+            <div className="user-chip">
+              <Shield size={14} style={{ color: 'var(--color-primary)' }} />
+              <span>{user.username}</span>
+              {user.root_admin && <span className="admin-badge">ADMIN</span>}
+            </div>
+            <button onClick={logout} className="topbar-btn" title="Sign Out"><LogOut size={14} /><span>Sign Out</span></button>
+            <button onClick={() => window.open('mailto:wingspanelsupport@gmail.com?subject=Bug Report&body=Describe the bug here...', '_blank')} className="topbar-btn" title="Report Bug"><Bug size={14} /><span>Report</span></button>
+            <button onClick={() => window.open('https://ko-fi.com/wingspanel', '_blank')} className="topbar-btn" title="Support on Ko-Fi"><Coffee size={14} /><span>Donate</span></button>
+          </div>
+        </header>
+        <div className="page-content">
         {!selectedServer ? (<>
 {activeTab === 'servers' && (
               <div>
@@ -603,7 +612,17 @@ export default function Dashboard() {
                       </div>
                     </div>
                   ))}
-                  {servers.length === 0 && <div className="card" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>No servers yet. Deploy one!</div>}
+                  {servers.length === 0 && (
+                    <div className="card" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                      <Layers size={48} style={{ color: 'var(--color-primary)', margin: '0 auto 16px', display: 'block', opacity: 0.7 }} />
+                      <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>No servers yet</p>
+                      <p style={{ fontSize: '0.875rem', marginBottom: '24px' }}>Deploy a ready-made demo server to explore the panel, or build your own.</p>
+                      <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                        <button onClick={deployDemoServer} className="btn btn-primary"><Sparkles size={16} /><span>Deploy Demo Server</span></button>
+                        <button onClick={() => setActiveTab('create-server')} className="btn btn-outline"><PlusCircle size={16} /><span>Deploy Custom</span></button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1154,6 +1173,13 @@ export default function Dashboard() {
               </div>
             )}
           </div>)}
+        </div>
+        <footer className="app-footer">
+          <Layers size={14} style={{ color: 'var(--color-primary)', opacity: 0.8 }} />
+          <span>Wings Panel × Pterodactyl Panel &copy; 2026</span>
+          <span className="footer-dot">·</span>
+          <span>Self-hosted Game Server Management Platform</span>
+        </footer>
       </main>
       {popup.open && (
         <div className="popup-overlay" onClick={() => setPopup({ ...popup, open: false })}>

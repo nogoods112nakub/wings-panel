@@ -188,8 +188,28 @@ curl -X POST http://localhost:8000/api/servers \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"Minecraft Server","node_id":1,"primary_allocation_id":1,"docker_image":"itzg/minecraft-server","startup_command":"java -Xmx1024M -jar server.jar nogui"}'
+
+# Deploy a ready-made demo server (no config needed)
+curl -X POST http://localhost:8000/api/servers/demo \
+  -H "Authorization: Bearer $TOKEN"
 ```
-# about-no-web
-# about-no-web
-# about-no-web
-# about-no-web
+
+## What happens on first boot
+
+On a fresh install the panel automatically sets everything up for you:
+
+- **Admin account**: `admin` / `admin12345`
+- **Primary Node**: registered and pointing at the daemon
+- **Allocations**: 34 ready-to-use ports (Minecraft, Terraria, Source, Bedrock, RCON, Garry's Mod)
+- **Demo Server**: a small `alpine:latest` demo server is deployed automatically (or click **Deploy Demo Server** on the empty Servers page anytime)
+
+The top bar shows the logged-in user with an **ADMIN** badge plus **Sign Out**, **Report**, and **Donate** buttons, and the footer brand (`Wings Panel × Pterodactyl Panel © 2026`) is shown on every page.
+
+## Env Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HOST_SERVERS_DIR` | `./servers` | Where game server files live on the host |
+| `WINGS_PANEL_REPO` | `https://github.com/nogoods112nakub/wings-panel.git` | Repo used for downloads |
+| `WINGS_PANEL_BRANCH` | `main` | Branch used for downloads |
+| `DEMO_IMAGE` | `alpine:latest` | Image used for the auto demo server |

@@ -1,11 +1,12 @@
 import os
 import asyncio
 import secrets
+import uuid
 import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, Query
+from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -39,7 +40,9 @@ PRECONFIGURED_ALLOCATIONS = [
 @asynccontextmanager
 async def lifespan(app):
     init_db()
-    run_startup_config()
+    fresh = run_startup_config()
+    if fresh:
+        asyncio.create_task(_auto_deploy_demo_after_daemon())
     asyncio.create_task(_sync_all_server_statuses())
     yield
 
@@ -60,19 +63,20 @@ app.add_middleware(
 )
 
 
-def run_startup_config():
+def run_startup_config() -> bool:
     from panel.database import SessionLocal
     db = SessionLocal()
     try:
-        create_default_admin(db)
+        fresh = create_default_admin(db)
         node = create_default_node(db)
         if node:
             create_default_allocations(db, node)
+        return fresh
     finally:
         db.close()
 
 
-def create_default_admin(db: Session):
+def create_default_admin(db: Session) -> bool:
     admin = db.query(models.User).filter(models.User.username == "admin").first()
     if not admin:
         admin = models.User(
@@ -84,8 +88,10 @@ def create_default_admin(db: Session):
         db.add(admin)
         db.commit()
         print("[PANEL] Default admin created — admin / admin12345")
+        return True
     else:
         print("[PANEL] Admin user exists, skipping")
+        return False
 
 
 def create_default_node(db: Session) -> models.Node:
@@ -645,6 +651,14 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
     return new_server
 
 
+@app.post("/api/servers/demo")
+async def create_demo_server(user: models.User = Depends(get_current_user)):
+    result = await deploy_demo_server()
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("detail", "Could not create demo server"))
+    return result
+
+
 async def _poll_install_complete(server_id: int, node_id: int):
     from panel.database import SessionLocal
     for i in range(60):
@@ -699,6 +713,106 @@ async def _poll_install_complete(server_id: int, node_id: int):
             print(f"[POLL] Server {server_id} install poll timed out — marked installed")
     finally:
         db.close()
+
+
+DEMO_IMAGE = os.getenv("DEMO_IMAGE", "alpine:latest")
+DEMO_STARTUP = "tail -f /dev/null"
+
+
+async def deploy_demo_server() -> dict:
+    from panel.database import SessionLocal
+    db = SessionLocal()
+    try:
+        node = db.query(models.Node).filter(models.Node.is_active == True).order_by(models.Node.id).first()
+        if not node:
+            return {"status": "error", "detail": "No active node registered. Register a node first."}
+        alloc = db.query(models.Allocation).filter(
+            models.Allocation.node_id == node.id,
+            models.Allocation.server_id.is_(None),
+        ).order_by(models.Allocation.id).first()
+        if not alloc:
+            return {"status": "error", "detail": "No free allocations on the node."}
+
+        admin = db.query(models.User).filter(models.User.username == "admin").first()
+        srv = models.Server(
+            name="Demo Server",
+            description="Auto-created demo server. Deploy your own from the Deploy tab, or delete this one anytime.",
+            owner_id=admin.id if admin else None,
+            node_id=node.id,
+            primary_allocation_id=alloc.id,
+            cpu_limit=100.0,
+            memory_limit=1024,
+            disk_limit=5120,
+            docker_image=DEMO_IMAGE,
+            docker_network="pterodactyl-net",
+            startup_command=DEMO_STARTUP,
+            status="installing",
+        )
+        db.add(srv)
+        db.flush()
+        alloc.server_id = srv.id
+        db.commit()
+        db.refresh(srv)
+
+        payload = {
+            "uuid": srv.uuid,
+            "docker_image": srv.docker_image,
+            "docker_network": srv.docker_network,
+            "cpu_limit": srv.cpu_limit,
+            "memory_limit": srv.memory_limit,
+            "disk_limit": srv.disk_limit,
+            "primary_port": alloc.port,
+            "allocations": [{"ip_address": alloc.ip_address, "port": alloc.port}],
+            "startup_command": srv.startup_command or "",
+            "host_network": False,
+        }
+        try:
+            await call_daemon(node, "/api/servers", method="POST", json_data=payload)
+            srv.status = "installing"
+        except HTTPException as e:
+            srv.status = "install_failed"
+            print(f"[DEMO] Daemon deploy failed: {e.detail}")
+        db.commit()
+        db.refresh(srv)
+
+        asyncio.create_task(_poll_install_complete(srv.id, node.id))
+        print(f"[DEMO] Demo server created → {srv.name} ({alloc.ip_address}:{alloc.port})")
+        return {"status": "created", "id": srv.id, "name": srv.name}
+    finally:
+        db.close()
+
+
+async def _auto_deploy_demo_after_daemon():
+    await asyncio.sleep(3)
+    from panel.database import SessionLocal
+    db = SessionLocal()
+    try:
+        node = db.query(models.Node).filter(models.Node.is_active == True).order_by(models.Node.id).first()
+        if not node:
+            return
+    finally:
+        db.close()
+
+    for attempt in range(40):
+        try:
+            await call_daemon(node, "/api/system")
+            break
+        except HTTPException:
+            if attempt == 39:
+                print("[DEMO] Daemon not reachable; skipping demo server auto-deploy")
+                return
+            await asyncio.sleep(3)
+
+    db = SessionLocal()
+    try:
+        if db.query(models.Server).count() > 0:
+            print("[DEMO] Servers already exist; skipping demo auto-deploy")
+            return
+    finally:
+        db.close()
+
+    await deploy_demo_server()
+    print("[DEMO] Demo server auto-deployed on first boot")
 
 
 async def _sync_all_server_statuses():
@@ -1019,6 +1133,7 @@ async def proxy_server_stats(server_id: int, db: Session = Depends(get_db), user
     status_map = {"running": "running", "exited": "stopped", "dead": "stopped"}
     new_status = status_map.get(daemon_status)
     if srv.status == "suspended":
+        stats["status"] = "suspended"
         return stats
     if new_status and srv.status != new_status:
         srv.status = new_status
@@ -1028,6 +1143,8 @@ async def proxy_server_stats(server_id: int, db: Session = Depends(get_db), user
     elif srv.installed is False and daemon_status in ("running", "exited"):
         srv.installed = True
         db.commit()
+    if new_status and stats.get("status") != new_status:
+        stats["status"] = new_status
     return stats
 
 
@@ -1106,6 +1223,39 @@ async def get_console_url(server_id: int, db: Session = Depends(get_db), user: m
     if not port:
         raise HTTPException(status_code=404, detail="Console not running")
     return {"port": port, "url": f"http://localhost:{port}/{srv.uuid}/"}
+
+
+# --- Backups ---
+@app.get("/api/servers/{server_id}/backups")
+async def list_server_backups(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    srv = get_server_or_404(server_id, db)
+    check_server_access(user, srv)
+    return await call_daemon(srv.node, f"/api/servers/{srv.uuid}/backups", method="GET")
+
+
+@app.post("/api/servers/{server_id}/backups")
+async def create_server_backup(server_id: int, body: dict, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    srv = get_server_or_404(server_id, db)
+    check_server_access(user, srv)
+    backup_id = body.get("backup_id") or str(uuid.uuid4())
+    resp = await call_daemon(srv.node, f"/api/servers/{srv.uuid}/backups", method="POST",
+                             json_data={"backup_id": backup_id, "name": body.get("name", "")})
+    return resp
+
+
+@app.delete("/api/servers/{server_id}/backups/{backup_id}", status_code=204)
+async def delete_server_backup(server_id: int, backup_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    srv = get_server_or_404(server_id, db)
+    check_server_access(user, srv)
+    await call_daemon(srv.node, f"/api/servers/{srv.uuid}/backups/{backup_id}", method="DELETE")
+    return Response(status_code=204)
+
+
+@app.post("/api/servers/{server_id}/backups/{backup_id}/restore")
+async def restore_server_backup(server_id: int, backup_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    srv = get_server_or_404(server_id, db)
+    check_server_access(user, srv)
+    return await call_daemon(srv.node, f"/api/servers/{srv.uuid}/backups/{backup_id}/restore", method="POST")
 
 
 # --- WebSocket Console Proxy ---
