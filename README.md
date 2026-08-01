@@ -213,3 +213,4 @@ The top bar shows the logged-in user with an **ADMIN** badge plus **Sign Out**, 
 | `WINGS_PANEL_REPO` | `https://github.com/nogoods112nakub/wings-panel.git` | Repo used for downloads |
 | `WINGS_PANEL_BRANCH` | `main` | Branch used for downloads |
 | `DEMO_IMAGE` | `alpine:latest` | Image used for the auto demo server |
+# about-no-web
