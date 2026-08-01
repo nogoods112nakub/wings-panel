@@ -12,6 +12,11 @@ A self-hosted Game Server Management Platform inspired by the Pterodactyl archit
 - **Power Controls** - Start, stop, kill, restart containers
 - **Real-time Console** - WebSocket-based log streaming and command input
 - **File Manager** - Browse, edit, create, delete files on game servers
+- **Container Logs** - View container stdout/stderr logs with configurable tail
+- **Server Cloning** - Clone existing servers to create new instances
+- **Docker Network Management** - Create and delete Docker networks
+- **Server Scheduling** - Schedule automatic power on/off actions
+- **Server Groups** - Organize servers into groups for easier management
 - **Resource Monitoring** - Live CPU, memory, and disk usage stats
 - **Allocation System** - Batch IP:port allocation across nodes
 - **Activity Log** - Track recent actions across the panel
@@ -152,6 +157,19 @@ docker-compose up --build
 | GET | `/api/system/status` | Panel status overview |
 | GET | `/api/system/health` | Health check |
 | GET | `/api/system/nodes-summary` | Per-node resource summary |
+| GET | `/api/servers/{id}/logs` | View container logs |
+| POST | `/api/servers/{id}/clone` | Clone a server |
+| GET | `/api/servers/{id}/schedules` | List server schedules |
+| POST | `/api/servers/{id}/schedules` | Create a schedule |
+| DELETE | `/api/servers/{id}/schedules/{schedule_id}` | Delete a schedule |
+| POST | `/api/servers/{id}/schedules/{schedule_id}/toggle` | Toggle schedule active state |
+| GET | `/api/server-groups` | List server groups |
+| POST | `/api/server-groups` | Create a server group (admin) |
+| PUT | `/api/server-groups/{group_id}` | Update a server group (admin) |
+| DELETE | `/api/server-groups/{group_id}` | Delete a server group (admin) |
+| PATCH | `/api/servers/{id}` | Update server (includes group_id) |
+| POST | `/api/system/networks` | Create a Docker network (admin) |
+| DELETE | `/api/system/networks/{name}` | Delete a Docker network (admin) |
 | GET | `/api/system/docker-networks` | List Docker networks |
 | POST | `/api/system/docker-build` | Build a Docker image from a Dockerfile |
 
@@ -213,6 +231,7 @@ The top bar shows the logged-in user with an **ADMIN** badge plus **Sign Out**, 
 | `WINGS_PANEL_REPO` | `https://github.com/nogoods112nakub/wings-panel.git` | Repo used for downloads |
 | `WINGS_PANEL_BRANCH` | `main` | Branch used for downloads |
 | `DEMO_IMAGE` | `alpine:latest` | Image used for the auto demo server |
+# about-no-web
 # about-no-web
 # about-no-web
 # about-no-web
