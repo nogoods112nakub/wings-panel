@@ -249,6 +249,25 @@ func verifyToken(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// validUUID checks that an identifier is safe to use in container names and filesystem paths.
+func validUUID(uuid string) bool {
+	if len(uuid) == 0 || len(uuid) > 64 {
+		return false
+	}
+	for _, c := range uuid {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// shQuote wraps a string in single quotes so it is safe to embed in a POSIX shell command.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // SafePath resolves and normalizes a relative path inside a server's sandboxed root directory, preventing traversal escapes.
 func SafePath(serverUUID, relativePath string) (string, error) {
 	cleanUUID := filepath.Base(serverUUID)
@@ -371,6 +390,10 @@ func handleConsoleManagement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	uuid := parts[0]
+	if !validUUID(uuid) {
+		http.Error(w, "Invalid server identifier", http.StatusBadRequest)
+		return
+	}
 	action := parts[1]
 
 	switch action {
@@ -494,7 +517,6 @@ func handleDockerBuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer os.RemoveAll(buildDir)
 
 	if err := os.WriteFile(filepath.Join(buildDir, "Dockerfile"), []byte(payload.Dockerfile), 0644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -507,6 +529,7 @@ func handleDockerBuild(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "build_started", "image": payload.ImageName})
 
 	go func() {
+		defer os.RemoveAll(buildDir)
 		ctx := context.Background()
 		tarReader, err := createTarContext(buildDir)
 		if err != nil {
@@ -579,6 +602,10 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 		var payload ServerInstallPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !validUUID(payload.UUID) {
+			http.Error(w, "Invalid uuid", http.StatusBadRequest)
 			return
 		}
 
@@ -735,6 +762,10 @@ func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uuid := parts[2]
+	if !validUUID(uuid) {
+		http.Error(w, "Invalid server identifier", http.StatusBadRequest)
+		return
+	}
 	subPath := ""
 	if len(parts) > 3 {
 		subPath = strings.Join(parts[3:], "/")
@@ -1022,6 +1053,10 @@ func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 // handleConsoleWS upgrades connection to WebSocket, creates a persistent interactive shell inside the container.
 // Architecture: Browser (xterm.js) <--WS--> Daemon <--exec TTY--> /bin/sh in container
 func handleConsoleWS(w http.ResponseWriter, r *http.Request, uuid string) {
+	if !validUUID(uuid) {
+		http.Error(w, "Invalid server identifier", http.StatusBadRequest)
+		return
+	}
 	token := r.URL.Query().Get("token")
 	if token != DaemonToken {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -1217,35 +1252,11 @@ func runExec(cli *client.Client, ctx context.Context, containerName string, cmd 
 	}
 	defer resp.Close()
 
-	// Docker multiplexed stream: 8-byte header per frame [stream_type(1), 0, 0, 0, size(4)]
-	var result strings.Builder
-	buf := make([]byte, 8192)
-	for {
-		n, readErr := resp.Reader.Read(buf)
-		if n > 0 {
-			data := buf[:n]
-			// Parse Docker stream frames
-			for len(data) >= 8 {
-				streamType := data[0]
-				size := uint32(data[4])<<24 | uint32(data[5])<<16 | uint32(data[6])<<8 | uint32(data[7])
-				data = data[8:]
-				if int(size) > len(data) {
-					size = uint32(len(data))
-				}
-				if streamType == 1 || streamType == 2 {
-					result.Write(data[:size])
-				}
-				data = data[size:]
-			}
-			if len(data) > 0 {
-				result.Write(data)
-			}
-		}
-		if readErr != nil {
-			break
-		}
+	out, err := readDemuxed(resp.Reader)
+	if err != nil {
+		return "", err
 	}
-	return result.String(), nil
+	return out, execExitCode(cli, ctx, execID.ID, out)
 }
 
 func runExecStdIn(cli *client.Client, ctx context.Context, containerName string, cmd []string, stdinData []byte) (string, error) {
@@ -1270,27 +1281,40 @@ func runExecStdIn(cli *client.Client, ctx context.Context, containerName string,
 		resp.CloseWrite()
 	}
 
+	out, err := readDemuxed(resp.Reader)
+	if err != nil {
+		return "", err
+	}
+	return out, execExitCode(cli, ctx, execID.ID, out)
+}
+
+// readDemuxed reads a Docker multiplexed stream (8-byte frame headers) and
+// concatenates stdout/stderr payloads, correctly buffering frames that span reads.
+func readDemuxed(reader io.Reader) (string, error) {
 	var result strings.Builder
+	var leftover []byte
 	buf := make([]byte, 8192)
 	for {
-		n, readErr := resp.Reader.Read(buf)
+		n, readErr := reader.Read(buf)
+		data := leftover
+		leftover = nil
 		if n > 0 {
-			data := buf[:n]
-			for len(data) >= 8 {
-				streamType := data[0]
-				size := uint32(data[4])<<24 | uint32(data[5])<<16 | uint32(data[6])<<8 | uint32(data[7])
-				data = data[8:]
-				if int(size) > len(data) {
-					size = uint32(len(data))
-				}
-				if streamType == 1 || streamType == 2 {
-					result.Write(data[:size])
-				}
-				data = data[size:]
+			data = append(data, buf[:n]...)
+		}
+		for len(data) >= 8 {
+			streamType := data[0]
+			size := int(uint32(data[4])<<24 | uint32(data[5])<<16 | uint32(data[6])<<8 | uint32(data[7]))
+			if len(data) < 8+size {
+				leftover = append(leftover, data...)
+				break
 			}
-			if len(data) > 0 {
-				result.Write(data)
+			if streamType == 1 || streamType == 2 {
+				result.Write(data[8 : 8+size])
 			}
+			data = data[8+size:]
+		}
+		if len(data) > 0 {
+			leftover = append(leftover, data...)
 		}
 		if readErr != nil {
 			break
@@ -1299,12 +1323,36 @@ func runExecStdIn(cli *client.Client, ctx context.Context, containerName string,
 	return result.String(), nil
 }
 
+// execExitCode waits for the exec to finalize and returns an error if it failed.
+func execExitCode(cli *client.Client, ctx context.Context, execID string, output string) error {
+	var inspect types.ContainerExecInspect
+	var err error
+	for i := 0; i < 20; i++ {
+		inspect, err = cli.ContainerExecInspect(ctx, execID)
+		if err != nil || !inspect.Running {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		return err
+	}
+	if inspect.ExitCode != 0 {
+		detail := strings.TrimSpace(output)
+		if len(detail) > 500 {
+			detail = detail[:500]
+		}
+		return fmt.Errorf("command exited with code %d: %s", inspect.ExitCode, detail)
+	}
+	return nil
+}
+
 func listFilesViaDocker(cli *client.Client, ctx context.Context, containerName string, relPath string) ([]map[string]interface{}, error) {
 	absPath := "/data/" + strings.TrimLeft(relPath, "/")
 	// Use ls -la and parse output — works on Alpine/busybox
 	out, err := runExec(cli, ctx, containerName, []string{
 		"/bin/sh", "-c",
-		fmt.Sprintf(`ls -1a "%s" 2>/dev/null`, absPath),
+		fmt.Sprintf(`ls -1a %s 2>/dev/null || true`, shQuote(absPath)),
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "No such container") {
@@ -1322,7 +1370,7 @@ func listFilesViaDocker(cli *client.Client, ctx context.Context, containerName s
 		// Stat each entry to get size and type
 		statOut, statErr := runExec(cli, ctx, containerName, []string{
 			"/bin/sh", "-c",
-			fmt.Sprintf(`if [ -d "%s/%s" ]; then echo "d 0"; else sz=$(stat -c "%%s" "%s/%s" 2>/dev/null || echo 0); echo "f $sz"; fi`, absPath, line, absPath, line),
+			fmt.Sprintf(`if [ -d %s ]; then echo "d 0"; else sz=$(stat -c "%%s" %s 2>/dev/null || echo 0); echo "f $sz"; fi`, shQuote(absPath+"/"+line), shQuote(absPath+"/"+line)),
 		})
 		if statErr != nil {
 			continue
@@ -1347,7 +1395,7 @@ func readFileViaDocker(cli *client.Client, ctx context.Context, containerName st
 	absPath := "/data/" + strings.TrimLeft(relPath, "/")
 	out, err := runExec(cli, ctx, containerName, []string{
 		"/bin/sh", "-c",
-		fmt.Sprintf("cat %s 2>/dev/null || echo -n ''", absPath),
+		fmt.Sprintf("cat %s 2>/dev/null || echo -n ''", shQuote(absPath)),
 	})
 	if err != nil {
 		return "", err
@@ -1360,7 +1408,7 @@ func writeFileViaDocker(cli *client.Client, ctx context.Context, containerName s
 	dirPath := filepath.Dir(absPath)
 	_, err := runExec(cli, ctx, containerName, []string{
 		"/bin/sh", "-c",
-		fmt.Sprintf("mkdir -p %s", dirPath),
+		fmt.Sprintf("mkdir -p %s", shQuote(dirPath)),
 	})
 	if err != nil {
 		return err
@@ -1370,7 +1418,7 @@ func writeFileViaDocker(cli *client.Client, ctx context.Context, containerName s
 	escaped = strings.ReplaceAll(escaped, "'", "'\\''")
 	_, err = runExec(cli, ctx, containerName, []string{
 		"/bin/sh", "-c",
-		fmt.Sprintf("printf '%%s' '%s' > %s", escaped, absPath),
+		fmt.Sprintf("printf '%%s' '%s' > %s", escaped, shQuote(absPath)),
 	})
 	return err
 }
@@ -1379,7 +1427,7 @@ func createFolderViaDocker(cli *client.Client, ctx context.Context, containerNam
 	absPath := "/data/" + strings.TrimLeft(relPath, "/")
 	_, err := runExec(cli, ctx, containerName, []string{
 		"/bin/sh", "-c",
-		fmt.Sprintf("mkdir -p %s", absPath),
+		fmt.Sprintf("mkdir -p %s", shQuote(absPath)),
 	})
 	return err
 }
@@ -1392,7 +1440,7 @@ func deletePathViaDocker(cli *client.Client, ctx context.Context, containerName 
 	}
 	_, err := runExec(cli, ctx, containerName, []string{
 		"/bin/sh", "-c",
-		fmt.Sprintf("rm -rf %s", absPath),
+		fmt.Sprintf("rm -rf %s", shQuote(absPath)),
 	})
 	return err
 }
@@ -1403,9 +1451,23 @@ func renamePathViaDocker(cli *client.Client, ctx context.Context, containerName 
 	dirNew := filepath.Dir(absNew)
 	_, err := runExec(cli, ctx, containerName, []string{
 		"/bin/sh", "-c",
-		fmt.Sprintf("mkdir -p %s && mv %s %s", dirNew, absOld, absNew),
+		fmt.Sprintf("mkdir -p %s && mv %s %s", shQuote(dirNew), shQuote(absOld), shQuote(absNew)),
 	})
 	return err
+}
+
+// validBackupID checks that a backup ID is safe to use in filenames and shell commands.
+func validBackupID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for _, c := range id {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // handleBackupRoutes handles backup creation, deletion, and restoration
@@ -1420,8 +1482,8 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if payload.BackupID == "" {
-			http.Error(w, "backup_id required", http.StatusBadRequest)
+		if !validBackupID(payload.BackupID) {
+			http.Error(w, "invalid backup_id", http.StatusBadRequest)
 			return
 		}
 
@@ -1429,14 +1491,14 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 		backupFile := filepath.Join(backupsDir, payload.BackupID+".tar.gz")
 
 		// Create tar.gz of /data via docker exec
-		tarCmd := fmt.Sprintf("tar czf /tmp/backup_%s.tar.gz -C /data . 2>/dev/null", payload.BackupID)
+		tarCmd := fmt.Sprintf("tar czf %s -C /data . 2>/dev/null", shQuote("/tmp/backup_"+payload.BackupID+".tar.gz"))
 		if _, err := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", tarCmd}); err != nil {
 			http.Error(w, fmt.Sprintf("tar create failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		// Copy tar.gz from container to host via docker exec
-		copyCmd := fmt.Sprintf("cat /tmp/backup_%s.tar.gz", payload.BackupID)
+		copyCmd := fmt.Sprintf("cat %s", shQuote("/tmp/backup_"+payload.BackupID+".tar.gz"))
 		out, err := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", copyCmd})
 		if err != nil {
 			http.Error(w, fmt.Sprintf("copy failed: %v", err), http.StatusInternalServerError)
@@ -1448,15 +1510,15 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 
 		// Clean up temp file in container
 		runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
-			fmt.Sprintf("rm -f /tmp/backup_%s.tar.gz", payload.BackupID)})
+			fmt.Sprintf("rm -f %s", shQuote("/tmp/backup_"+payload.BackupID+".tar.gz"))})
 
 		size := int64(len(backupData))
 		if writeErr != nil {
 			// Fallback: keep backup inside container volume
-			cpExec := fmt.Sprintf("cp /tmp/backup_%s.tar.gz /data/.wings_backups/%s.tar.gz", payload.BackupID, payload.BackupID)
+			cpExec := fmt.Sprintf("cp %s %s", shQuote("/tmp/backup_"+payload.BackupID+".tar.gz"), shQuote("/data/.wings_backups/"+payload.BackupID+".tar.gz"))
 			runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", cpExec})
 			sizeOut, _ := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
-				fmt.Sprintf("stat -c %%s /data/.wings_backups/%s.tar.gz 2>/dev/null || echo 0", payload.BackupID)})
+				fmt.Sprintf("stat -c %%s %s 2>/dev/null || echo 0", shQuote("/data/.wings_backups/"+payload.BackupID+".tar.gz"))})
 			fmt.Sscanf(strings.TrimSpace(sizeOut), "%d", &size)
 		}
 
@@ -1477,6 +1539,10 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 	}
 
 	backupID := parts[0]
+	if !validBackupID(backupID) {
+		http.Error(w, "Invalid backup id", http.StatusBadRequest)
+		return
+	}
 	subAction := ""
 	if len(parts) >= 2 {
 		subAction = parts[1]
@@ -1487,7 +1553,7 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 		backupFile := filepath.Join(backupsDir, backupID+".tar.gz")
 		containerBackupPath := fmt.Sprintf("/data/.wings_backups/%s.tar.gz", backupID)
 		os.Remove(backupFile)
-		runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", fmt.Sprintf("rm -f %s", containerBackupPath)})
+		runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", fmt.Sprintf("rm -f %s", shQuote(containerBackupPath))})
 		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 		return
 	}
@@ -1499,7 +1565,7 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 
 		// Check if backup exists in container or on host
 		checkOut, _ := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c",
-			fmt.Sprintf("test -f %s && echo exists || echo missing", containerBackupPath)})
+			fmt.Sprintf("test -f %s && echo exists || echo missing", shQuote(containerBackupPath))})
 		if strings.TrimSpace(checkOut) != "exists" {
 			if _, err := os.Stat(backupFile); os.IsNotExist(err) {
 				http.Error(w, "Backup not found", http.StatusNotFound)
@@ -1511,14 +1577,14 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 				return
 			}
 			execID, err := runExecStdIn(cli, ctx, containerName, []string{"/bin/sh", "-c",
-				fmt.Sprintf("mkdir -p /data/.wings_backups && cat > %s", containerBackupPath)}, hostData)
+				fmt.Sprintf("mkdir -p %s && cat > %s", shQuote("/data/.wings_backups"), shQuote(containerBackupPath))}, hostData)
 			if err != nil || strings.TrimSpace(execID) == "" {
 				http.Error(w, "Failed to copy backup into container", http.StatusInternalServerError)
 				return
 			}
 		}
 
-		restoreCmd := fmt.Sprintf("cd /data && tar xzf %s --exclude='.wings_backups' 2>/dev/null", containerBackupPath)
+		restoreCmd := fmt.Sprintf("cd /data && tar xzf %s --exclude='.wings_backups' 2>/dev/null", shQuote(containerBackupPath))
 		if _, err := runExec(cli, ctx, containerName, []string{"/bin/sh", "-c", restoreCmd}); err != nil {
 			http.Error(w, fmt.Sprintf("restore failed: %v", err), http.StatusInternalServerError)
 			return

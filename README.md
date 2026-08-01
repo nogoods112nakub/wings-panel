@@ -73,7 +73,7 @@ $env:HOST_SERVERS_DIR = "$(Get-Location)\servers"
 docker-compose up --build
 ```
 
-### Linux / macOS (Bash)
+### Linux (Bash)
 ```bash
 export HOST_SERVERS_DIR="$(pwd)/servers"
 docker-compose up --build
@@ -174,3 +174,4 @@ curl -X POST http://localhost:8000/api/servers \
   -H 'Content-Type: application/json' \
   -d '{"name":"Minecraft Server","node_id":1,"primary_allocation_id":1,"docker_image":"itzg/minecraft-server","startup_command":"java -Xmx1024M -jar server.jar nogui"}'
 ```
+# about-no-web

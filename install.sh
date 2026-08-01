@@ -4,6 +4,15 @@ set -euo pipefail
 INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$INSTALL_DIR"
 
+SCRIPT_ARGS=("$@")
+
+AUTO_YES=""
+for _arg in "$@"; do
+    case "$_arg" in
+        -y|--yes) AUTO_YES="yes" ;;
+    esac
+done
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
@@ -39,11 +48,20 @@ detect_os() {
         OS_ID="${ID:-unknown}"
         OS_NAME="${PRETTY_NAME:-$NAME}"
         [ -n "${OS_NAME:-}" ] || OS_NAME="$OS_ID"
-    elif [ "$(uname -s)" = "Darwin" ]; then
-        OS_ID="macos"; OS_NAME="macOS"
     else
         OS_ID="unknown"; OS_NAME="$(uname -s)"
     fi
+
+    case "$OS_ID" in
+        macos)
+            fail "Wings Panel installer supports Linux only (macOS is not supported)." ;;
+        unknown|"")
+            if [ "$(uname -s)" != "Linux" ]; then
+                fail "Wings Panel installer supports Linux only. Detected: $OS_NAME"
+            fi
+            warn "Could not detect the Linux distribution; continuing with generic defaults." ;;
+    esac
+
     ok "OS detected: $OS_NAME"
 }
 
@@ -61,8 +79,6 @@ install_curl() {
             as_root apk add --no-cache curl ;;
         opensuse*|suse)
             as_root zypper --non-interactive install curl ;;
-        macos)
-            : ;; # curl is built into macOS
         *)
             fail "curl is required. Install it manually for $OS_NAME." ;;
     esac
@@ -87,12 +103,6 @@ install_pkg_docker() {
         opensuse*|suse)
             as_root zypper --non-interactive install docker docker-compose
             as_root systemctl enable --now docker 2>/dev/null || true ;;
-        macos)
-            if command -v brew &>/dev/null; then
-                brew install --cask docker
-            else
-                fail "macOS requires Homebrew. Install it first: https://brew.sh/"
-            fi ;;
         *)
             warn "No package recipe for $OS_NAME, trying the official Docker install script..."
             as_root sh -c 'curl -fsSL https://get.docker.com | sh'
@@ -125,10 +135,81 @@ install_compose() {
     ok "Docker Compose installed: $(docker-compose --version)"
 }
 
+REPO_URL="${WINGS_PANEL_REPO:-https://github.com/nogoods112nakub/wings-panel.git}"
+REPO_BRANCH="${WINGS_PANEL_BRANCH:-main}"
+
+download_repo() {
+    local dest="${1:-$INSTALL_DIR/wings-panel}"
+    local repo_path="${REPO_URL#https://github.com/}"
+    repo_path="${repo_path%.git}"
+
+    if [ -d "$dest/.git" ]; then
+        info "Updating existing Wings Panel in $dest..."
+        if git -C "$dest" pull --ff-only >/dev/null 2>&1; then
+            return 0
+        fi
+        warn "git pull failed; re-downloading a clean copy..."
+        rm -rf "$dest"
+    fi
+
+    if command -v curl &>/dev/null; then
+        info "Downloading Wings Panel from $REPO_URL (branch: $REPO_BRANCH)..."
+        local tmpzip="/tmp/wings-panel-${RANDOM}.zip"
+        local tmpext="/tmp/wings-panel-extract-${RANDOM}"
+        curl -fsSL "https://codeload.github.com/$repo_path/zip/refs/heads/$REPO_BRANCH" -o "$tmpzip"
+        command -v unzip &>/dev/null || fail "unzip is required to extract the download."
+        mkdir -p "$tmpext" "$dest"
+        unzip -q "$tmpzip" -d "$tmpext"
+        shopt -s dotglob nullglob
+        mv "$tmpext"/*/* "$dest"/ 2>/dev/null || mv "$tmpext"/*/*/* "$dest"/ 2>/dev/null
+        shopt -u dotglob nullglob
+        rm -rf "$tmpext" "$tmpzip"
+    elif command -v git &>/dev/null; then
+        info "curl not found, using git clone as fallback..."
+        git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$dest"
+    else
+        fail "Need curl or git to download from GitHub."
+    fi
+
+    [ -f "$dest/docker-compose.yml" ] || fail "Download failed: docker-compose.yml not found in $dest."
+    ok "Wings Panel downloaded to $dest"
+}
+
+# fetch_latest pulls the latest code from GitHub before installing.
+# In a git checkout it updates in place; otherwise it downloads a fresh copy
+# into ./wings-panel and re-runs the installer from there.
+fetch_latest() {
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        info "Pulling latest changes from GitHub (branch: $REPO_BRANCH)..."
+        git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null \
+            && ok "Code updated to latest" \
+            || warn "git pull failed; using existing code."
+    elif [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
+        warn "Not a git checkout; skipping GitHub download and using local code."
+    else
+        download_repo "$INSTALL_DIR/wings-panel"
+        info "Installing from the downloaded copy..."
+        exec bash "$INSTALL_DIR/wings-panel/install.sh" "${SCRIPT_ARGS[@]}"
+    fi
+}
+
 preflight() {
     info "Checking prerequisites..."
 
     detect_os
+
+    if [ ! -f "$INSTALL_DIR/docker-compose.yml" ]; then
+        if [ "${SCRIPT_ARGS[0]:-menu}" = "download" ]; then
+            return 0
+        fi
+        warn "docker-compose.yml not found in $INSTALL_DIR."
+        if confirm "Download Wings Panel (with docker-compose.yml) from GitHub into $INSTALL_DIR/wings-panel?"; then
+            download_repo "$INSTALL_DIR/wings-panel"
+            info "Re-running the installer from the downloaded repo..."
+            exec bash "$INSTALL_DIR/wings-panel/install.sh" "${SCRIPT_ARGS[@]}"
+        fi
+        fail "docker-compose.yml is required. Run this installer again and approve the GitHub download, or clone the repo: git clone $REPO_URL"
+    fi
 
     if ! command -v curl &>/dev/null; then
         install_curl
@@ -393,14 +474,18 @@ usage() {
     echo "Usage: $0 [command]"
     echo ""
     echo "Commands:"
-    echo "  install    Full install (db, panel, frontend, daemon)"
+    echo "  install    Pull latest from GitHub, then full install (db, panel, frontend, daemon)"
     echo "  panel      Install Panel only (db, panel, frontend)"
     echo "  daemon     Install Daemon only"
     echo "  update     Update images and restart"
+    echo "  download   Download the source from GitHub (with docker-compose.yml)"
     echo "  uninstall  Stop and remove all services (with confirmation)"
     echo "  help       Show this help"
     echo ""
+    echo "Env vars: WINGS_PANEL_REPO (default: $REPO_URL), WINGS_PANEL_BRANCH (default: $REPO_BRANCH)"
+    echo ""
     echo "With no command, an interactive menu is shown."
+    echo "If docker-compose.yml is missing, the installer downloads the repo from GitHub automatically."
     exit 0
 }
 
@@ -414,17 +499,19 @@ menu() {
         echo -e "${CYAN}  │  ${NC}2) Install Panel only                     ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}3) Install Daemon only                    ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}4) Update                                ${CYAN}│${NC}"
-        echo -e "${CYAN}  │  ${NC}5) Uninstall                             ${CYAN}│${NC}"
+        echo -e "${CYAN}  │  ${NC}5) Download from GitHub                  ${CYAN}│${NC}"
+        echo -e "${CYAN}  │  ${NC}6) Uninstall                             ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}0) Exit                                 ${CYAN}│${NC}"
         echo -e "${CYAN}  └──────────────────────────────────────────┘${NC}"
         read -rp "  Choice: " choice
         echo ""
         case "$choice" in
-            1) stop_all; install_full; wait_for_services all; show_logs; summary ;;
+            1) fetch_latest; stop_all; install_full; wait_for_services all; show_logs; summary ;;
             2) install_panel; wait_for_services panel; summary ;;
             3) install_daemon; wait_for_services daemon ;;
             4) update; summary ;;
-            5) uninstall ;;
+            5) download_repo; info "Next: run  ./wings-panel/install.sh  (or re-run this installer from that folder)" ;;
+            6) uninstall ;;
             0) info "Goodbye."; exit 0 ;;
             *) warn "Invalid choice: $choice" ;;
         esac
@@ -438,18 +525,16 @@ preflight
 setup_env
 create_network
 
-AUTO_YES=""
-for _arg in "$@"; do
-    case "$_arg" in
-        -y|--yes) AUTO_YES="yes" ;;
-    esac
-done
-
 case "${1:-menu}" in
-    install)   stop_all; install_full; wait_for_services all; show_logs; summary ;;
+    install)   fetch_latest; stop_all; install_full; wait_for_services all; show_logs; summary ;;
     panel)     install_panel; wait_for_services panel; summary ;;
     daemon)    install_daemon; wait_for_services daemon ;;
     update)    update; summary ;;
+    download)  if [ -d "$INSTALL_DIR/wings-panel" ] && [ -f "$INSTALL_DIR/wings-panel/docker-compose.yml" ]; then
+                   info "Already downloaded to $INSTALL_DIR/wings-panel"
+               else
+                   download_repo
+               fi ;;
     uninstall) uninstall ;;
     help|-h|--help) usage ;;
     menu|"")   menu ;;

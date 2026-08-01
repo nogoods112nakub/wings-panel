@@ -4,6 +4,7 @@ import secrets
 import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -708,6 +709,8 @@ async def _sync_all_server_statuses():
         try:
             servers = db.query(models.Server).filter(models.Server.installed == True).all()
             for srv in servers:
+                if srv.status == "suspended":
+                    continue
                 node = srv.node
                 if not node:
                     continue
@@ -1015,6 +1018,8 @@ async def proxy_server_stats(server_id: int, db: Session = Depends(get_db), user
     daemon_status = stats.get("status", "")
     status_map = {"running": "running", "exited": "stopped", "dead": "stopped"}
     new_status = status_map.get(daemon_status)
+    if srv.status == "suspended":
+        return stats
     if new_status and srv.status != new_status:
         srv.status = new_status
         if srv.installed is False and daemon_status == "running":
@@ -1031,7 +1036,7 @@ async def proxy_file_list(server_id: int, path: str = "", db: Session = Depends(
     srv = get_server_or_404(server_id, db)
     check_server_access(user, srv)
     node = srv.node
-    return await call_daemon(node, f"/api/servers/{srv.uuid}/files/list?path={path}")
+    return await call_daemon(node, f"/api/servers/{srv.uuid}/files/list?path={quote(path, safe='/')}")
 
 
 @app.get("/api/servers/{server_id}/files/read")
@@ -1039,7 +1044,7 @@ async def proxy_file_read(server_id: int, path: str, db: Session = Depends(get_d
     srv = get_server_or_404(server_id, db)
     check_server_access(user, srv)
     node = srv.node
-    return await call_daemon(node, f"/api/servers/{srv.uuid}/files/read?path={path}")
+    return await call_daemon(node, f"/api/servers/{srv.uuid}/files/read?path={quote(path, safe='/')}")
 
 
 @app.post("/api/servers/{server_id}/files/write")
@@ -1063,7 +1068,7 @@ async def proxy_file_delete(server_id: int, path: str, db: Session = Depends(get
     srv = get_server_or_404(server_id, db)
     check_server_access(user, srv)
     node = srv.node
-    return await call_daemon(node, f"/api/servers/{srv.uuid}/files/delete?path={path}", method="DELETE")
+    return await call_daemon(node, f"/api/servers/{srv.uuid}/files/delete?path={quote(path, safe='/')}", method="DELETE")
 
 
 @app.post("/api/servers/{server_id}/files/rename")
@@ -1077,27 +1082,24 @@ async def proxy_file_rename(server_id: int, body: dict, db: Session = Depends(ge
 # --- Console (ttyd) Management ---
 @app.post("/api/servers/{server_id}/console/start")
 async def start_console(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = db.query(models.Server).filter(models.Server.id == server_id).first()
-    if not srv:
-        raise HTTPException(status_code=404, detail="Server not found")
+    srv = get_server_or_404(server_id, db)
+    check_server_access(user, srv)
     node = srv.node
     resp = await call_daemon(node, f"/api/console/{srv.uuid}/start", method="POST")
     return resp
 
 @app.delete("/api/servers/{server_id}/console/stop")
 async def stop_console(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = db.query(models.Server).filter(models.Server.id == server_id).first()
-    if not srv:
-        raise HTTPException(status_code=404, detail="Server not found")
+    srv = get_server_or_404(server_id, db)
+    check_server_access(user, srv)
     node = srv.node
     resp = await call_daemon(node, f"/api/console/{srv.uuid}/stop", method="DELETE")
     return resp
 
 @app.get("/api/servers/{server_id}/console/url")
 async def get_console_url(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    srv = db.query(models.Server).filter(models.Server.id == server_id).first()
-    if not srv:
-        raise HTTPException(status_code=404, detail="Server not found")
+    srv = get_server_or_404(server_id, db)
+    check_server_access(user, srv)
     node = srv.node
     resp = await call_daemon(node, f"/api/console/{srv.uuid}/url", method="GET")
     port = resp.get("port", 0)
