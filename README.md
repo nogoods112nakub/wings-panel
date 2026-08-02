@@ -17,6 +17,8 @@ A self-hosted Game Server Management Platform inspired by the Pterodactyl archit
 - **Docker Network Management** - Create and delete Docker networks
 - **Server Scheduling** - Schedule automatic power on/off actions
 - **Server Groups** - Organize servers into groups for easier management
+- **Cloudflare DNS** - Manage DNS records for game server domains via Cloudflare API
+- **Playit.gg Tunnels** - Create public-access tunnels for game servers without port forwarding
 - **Resource Monitoring** - Live CPU, memory, and disk usage stats
 - **Allocation System** - Batch IP:port allocation across nodes
 - **Activity Log** - Track recent actions across the panel
@@ -172,6 +174,12 @@ docker-compose up --build
 | DELETE | `/api/system/networks/{name}` | Delete a Docker network (admin) |
 | GET | `/api/system/docker-networks` | List Docker networks |
 | POST | `/api/system/docker-build` | Build a Docker image from a Dockerfile |
+| GET | `/api/cloudflare/dns/list` | List Cloudflare DNS records (admin) |
+| POST | `/api/cloudflare/dns/create` | Create a Cloudflare DNS record (admin) |
+| DELETE | `/api/cloudflare/dns/delete/{record_id}` | Delete a Cloudflare DNS record (admin) |
+| GET | `/api/playit/tunnel/list` | List Playit.gg tunnels (admin) |
+| POST | `/api/playit/tunnel/create` | Create a Playit.gg tunnel (admin) |
+| DELETE | `/api/playit/tunnel/delete/{tunnel_id}` | Delete a Playit.gg tunnel (admin) |
 
 ### Activity & API Keys
 | Method | Path | Description |
@@ -231,6 +239,11 @@ The top bar shows the logged-in user with an **ADMIN** badge plus **Sign Out**, 
 | `WINGS_PANEL_REPO` | `https://github.com/nogoods112nakub/wings-panel.git` | Repo used for downloads |
 | `WINGS_PANEL_BRANCH` | `main` | Branch used for downloads |
 | `DEMO_IMAGE` | `alpine:latest` | Image used for the auto demo server |
+| `CLOUDFLARE_API_TOKEN` | *(empty)* | Cloudflare API token for DNS management |
+| `CLOUDFLARE_ZONE_ID` | *(empty)* | Cloudflare Zone ID for DNS management |
+| `PLAYIT_CLAIM_TOKEN` | *(empty)* | Playit.gg claim token for tunnel management |
+| `PLAYIT_API_URL` | `https://api.playit.gg` | Playit.gg API endpoint |
+# about-no-web
 # about-no-web
 # about-no-web
 # about-no-web
