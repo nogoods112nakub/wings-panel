@@ -203,6 +203,12 @@ def get_optional_user(
     return db.query(models.User).filter(models.User.id == user_id).first()
 
 
+def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
+    if not user.root_admin:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return user
+
+
 # =============================================================================
 # CLOUDFLARE DNS ENDPOINTS
 # =============================================================================
@@ -263,12 +269,6 @@ async def delete_playit_tunnel(tunnel_id: str, db: Session = Depends(get_db), ad
     except HTTPException:
         pass
     return Response(status_code=204)
-
-
-def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
-    if not user.root_admin:
-        raise HTTPException(status_code=403, detail="Admin privileges required")
-    return user
 
 
 def get_server_or_404(server_id: int, db: Session) -> models.Server:
@@ -906,19 +906,25 @@ async def _run_due_schedules():
                 node = srv.node if srv else None
                 if not srv or not node:
                     continue
-                due = False
                 if sched.recurring and sched.recurring_pattern:
                     cron = _parse_cron(sched.recurring_pattern)
-                    if cron and _cron_matches(now, cron):
-                        due = True
-                elif not sched.recurring and sched.scheduled_time is not None:
+                    if not cron:
+                        continue
+                    if sched.scheduled_time is None:
+                        sched.scheduled_time = _next_cron(now, cron)
+                        db.commit()
+                        continue
+                    st = sched.scheduled_time
+                    if st.tzinfo is None:
+                        st = st.replace(tzinfo=timezone.utc)
+                    if now >= st and (now - st) <= timedelta(minutes=5):
+                        await _fire_schedule(db, sched, srv, node, now)
+                elif sched.scheduled_time is not None:
                     st = sched.scheduled_time
                     if st.tzinfo is None:
                         st = st.replace(tzinfo=timezone.utc)
                     if now >= st and (now - st) <= timedelta(seconds=120):
-                        due = True
-                if due:
-                    await _fire_schedule(db, sched, srv, node, now)
+                        await _fire_schedule(db, sched, srv, node, now)
         finally:
             db.close()
 
@@ -1818,17 +1824,22 @@ def list_server_schedules(server_id: int, db: Session = Depends(get_db), user: m
 def create_server_schedule(server_id: int, body: schemas.ServerScheduleCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     srv = get_server_or_404(server_id, db)
     check_server_access(user, srv, perm="schedules")
+    scheduled_time = body.scheduled_time
+    if body.recurring and body.recurring_pattern:
+        cron = _parse_cron(body.recurring_pattern)
+        if cron:
+            scheduled_time = _next_cron(datetime.now(timezone.utc), cron)
     schedule = models.ServerSchedule(
         server_id=server_id,
         action=body.action,
-        scheduled_time=body.scheduled_time,
+        scheduled_time=scheduled_time,
         recurring=body.recurring,
         recurring_pattern=body.recurring_pattern,
     )
     db.add(schedule)
     db.commit()
     db.refresh(schedule)
-    log_activity(db, user_id=user.id, server_id=server_id, action="schedule.create", detail=f"Schedule created for '{srv.name}': {body.action} at {body.scheduled_time}")
+    log_activity(db, user_id=user.id, server_id=server_id, action="schedule.create", detail=f"Schedule created for '{srv.name}': {body.action} at {scheduled_time}")
     return schedule
 
 

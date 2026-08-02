@@ -448,7 +448,7 @@ export default function Dashboard() {
     if (!selectedServer) return
     if (!scheduleTime && !scheduleCron) { showPopup('error', 'Missing Info', 'Select a time (or a cron pattern for recurring schedules)'); return }
     try {
-      const res = await apiFetch(`/api/servers/${selectedServer.id}/schedules`, { method: 'POST', body: JSON.stringify({ action: scheduleAction, scheduled_time: scheduleTime ? new Date(scheduleTime).toISOString() : scheduleTime, recurring: scheduleRecurring, recurring_pattern: scheduleRecurring ? scheduleCron : null }) })
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/schedules`, { method: 'POST', body: JSON.stringify({ action: scheduleAction, scheduled_time: scheduleTime ? new Date(scheduleTime).toISOString() : null, recurring: scheduleRecurring, recurring_pattern: scheduleRecurring ? scheduleCron : null }) })
       if (res.ok) { showPopup('success', 'Scheduled', `Power action scheduled.`); setShowScheduleDialog(false); setScheduleTime(''); setScheduleRecurring(false); setScheduleCron('0 0 * * *'); fetchSchedules(selectedServer.id); fetchAll() }
       else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create schedule') }
     } catch { showPopup('error', 'Error', 'Connection failed') }

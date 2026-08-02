@@ -236,9 +236,8 @@ class ServerGroupResponse(ServerGroupBase):
 
 # --- Server Schedule Schemas ---
 class ServerScheduleBase(BaseModel):
-    server_id: int
     action: str = Field(..., pattern=r"^(start|stop|kill|restart)$")
-    scheduled_time: datetime
+    scheduled_time: Optional[datetime] = None
     recurring: bool = False
     recurring_pattern: Optional[str] = None
 
