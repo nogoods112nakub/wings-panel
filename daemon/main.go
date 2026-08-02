@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -419,6 +420,8 @@ func main() {
 	http.HandleFunc("/api/system", handleSystem)
 	http.HandleFunc("/api/system/networks", handleSystemNetworks)
 	http.HandleFunc("/api/system/networks/", handleSystemNetworkDelete)
+	http.HandleFunc("/api/system/images", handleSystemImages)
+	http.HandleFunc("/api/system/images/", handleSystemImageDelete)
 	http.HandleFunc("/api/system/build", handleDockerBuild)
 	http.HandleFunc("/api/servers", handleServers)
 	http.HandleFunc("/api/servers/", handleServerSpecific)
@@ -628,6 +631,72 @@ func handleSystemNetworkDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := cli.NetworkRemove(context.Background(), name); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to remove network: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleSystemImages(w http.ResponseWriter, r *http.Request) {
+	if !verifyToken(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cli, err := getDockerClient()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	images, err := cli.ImageList(context.Background(), types.ImageListOptions{})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to list images: %v", err), http.StatusInternalServerError)
+		return
+	}
+	result := make([]map[string]interface{}, 0, len(images))
+	for _, img := range images {
+		repos := img.RepoTags
+		if len(repos) == 0 {
+			repos = []string{img.ID[:min(len(img.ID), 12)]}
+		}
+		for _, repo := range repos {
+			result = append(result, map[string]interface{}{
+				"name":    repo,
+				"id":      img.ID,
+				"size":    img.Size,
+				"created": img.Created,
+			})
+		}
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+func handleSystemImageDelete(w http.ResponseWriter, r *http.Request) {
+	if !verifyToken(w, r) {
+		return
+	}
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/system/images/"), "/")
+	if name == "" {
+		http.Error(w, "image name required", http.StatusBadRequest)
+		return
+	}
+	decoded, err := url.QueryUnescape(name)
+	if err == nil && decoded != "" {
+		name = decoded
+	}
+	cli, err := getDockerClient()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	_, err = cli.ImageRemove(context.Background(), name, types.ImageRemoveOptions{Force: true})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to remove image: %v", err), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

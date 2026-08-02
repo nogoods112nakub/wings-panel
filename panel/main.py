@@ -400,6 +400,9 @@ async def build_docker_image(body: dict, db: Session = Depends(get_db), user: mo
 # --- Auth Endpoints ---
 @app.post("/api/auth/register", response_model=schemas.TokenResponse, status_code=201)
 def register(body: schemas.UserCreate, db: Session = Depends(get_db)):
+    reg_setting = db.query(models.PanelSetting).filter(models.PanelSetting.key == "registration_enabled").first()
+    if reg_setting and reg_setting.value == "false":
+        raise HTTPException(status_code=403, detail="Registration is disabled by the administrator")
     if db.query(models.User).filter(models.User.username == body.username).first():
         raise HTTPException(status_code=400, detail="Username already taken")
     if db.query(models.User).filter(models.User.email == body.email).first():
@@ -715,6 +718,8 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
         new_server.status = "install_failed"
     db.commit()
     db.refresh(new_server)
+
+    _fire_webhooks("server.created", {"server_id": new_server.id, "name": new_server.name, "uuid": new_server.uuid, "image": new_server.docker_image})
 
     asyncio.create_task(_poll_install_complete(new_server.id, node.id))
 
@@ -1146,6 +1151,7 @@ async def send_power_action(server_id: int, action: str, db: Session = Depends(g
     db.commit()
 
     log_activity(db, user_id=user.id, server_id=srv.id, action=f"server.power.{action}", detail=f"Server '{srv.name}' {action} action dispatched")
+    _fire_webhooks(f"server.power.{action}", {"server_id": srv.id, "name": srv.name, "uuid": srv.uuid})
 
     await asyncio.sleep(3)
     try:
@@ -1328,6 +1334,7 @@ async def delete_server(server_id: int, db: Session = Depends(get_db), user: mod
         raise HTTPException(status_code=403, detail="Access denied")
 
     server_name = srv.name
+    server_uuid = srv.uuid
     node = srv.node
     try:
         await call_daemon(node, f"/api/servers/{srv.uuid}", method="DELETE")
@@ -1335,6 +1342,7 @@ async def delete_server(server_id: int, db: Session = Depends(get_db), user: mod
         pass
 
     log_activity(db, user_id=user.id, server_id=srv.id, action="server.delete", detail=f"Server '{server_name}' deleted")
+    _fire_webhooks("server.deleted", {"server_id": srv.id, "name": server_name, "uuid": server_uuid})
 
     db.query(models.Allocation).filter(models.Allocation.server_id == srv.id).update({"server_id": None})
     db.delete(srv)
@@ -1989,4 +1997,280 @@ def delete_bug_report(report_id: int, db: Session = Depends(get_db), admin: mode
         raise HTTPException(status_code=404, detail="Bug report not found")
     db.delete(report)
     db.commit()
+    return None
+
+
+# =============================================================================
+# WEBHOOK DELIVERY
+# =============================================================================
+async def _deliver_webhooks(event: str, payload: dict):
+    from panel.database import SessionLocal
+    db = SessionLocal()
+    try:
+        hooks = db.query(models.Webhook).filter(models.Webhook.is_active == True).all()
+        matched = [h for h in hooks if event in h.event_list()]
+        if not matched:
+            return
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for h in matched:
+                try:
+                    await client.post(
+                        h.url,
+                        json={"event": event, "data": payload, "timestamp": datetime.now(timezone.utc).isoformat()},
+                        headers={"Content-Type": "application/json", "User-Agent": "wings-panel-webhook/1.0"},
+                    )
+                except Exception:
+                    continue
+    finally:
+        db.close()
+
+
+def _fire_webhooks(event: str, payload: dict):
+    try:
+        asyncio.create_task(_deliver_webhooks(event, payload))
+    except Exception:
+        pass
+
+
+# =============================================================================
+# SERVER TEMPLATE ENDPOINTS
+# =============================================================================
+@app.get("/api/templates", response_model=List[schemas.ServerTemplateResponse])
+def list_server_templates(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    return db.query(models.ServerTemplate).order_by(models.ServerTemplate.featured.desc(), models.ServerTemplate.name).all()
+
+
+@app.post("/api/templates", response_model=schemas.ServerTemplateResponse, status_code=201)
+def create_server_template(body: schemas.ServerTemplateCreate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    if db.query(models.ServerTemplate).filter(models.ServerTemplate.name == body.name).first():
+        raise HTTPException(status_code=400, detail="Template name already exists")
+    template = models.ServerTemplate(
+        name=body.name,
+        description=body.description,
+        docker_image=body.docker_image,
+        docker_network=body.docker_network,
+        startup_command=body.startup_command,
+        cpu_limit=body.cpu_limit,
+        memory_limit=body.memory_limit,
+        disk_limit=body.disk_limit,
+        alloc_port=body.alloc_port,
+        featured=body.featured,
+        created_by=admin.id,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    log_activity(db, user_id=admin.id, action="template.create", detail=f"Template '{template.name}' created")
+    return template
+
+
+@app.put("/api/templates/{template_id}", response_model=schemas.ServerTemplateResponse)
+def update_server_template(template_id: int, body: schemas.ServerTemplateUpdate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    template = db.query(models.ServerTemplate).filter(models.ServerTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    for field in ("name", "description", "docker_image", "docker_network", "startup_command", "cpu_limit", "memory_limit", "disk_limit", "alloc_port", "featured"):
+        value = getattr(body, field, None)
+        if value is not None:
+            setattr(template, field, value)
+    db.commit()
+    db.refresh(template)
+    log_activity(db, user_id=admin.id, action="template.update", detail=f"Template '{template.name}' updated")
+    return template
+
+
+@app.delete("/api/templates/{template_id}", status_code=204)
+def delete_server_template(template_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    template = db.query(models.ServerTemplate).filter(models.ServerTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    log_activity(db, user_id=admin.id, action="template.delete", detail=f"Template '{template.name}' deleted")
+    db.delete(template)
+    db.commit()
+    return None
+
+
+# =============================================================================
+# WEBHOOK ENDPOINTS
+# =============================================================================
+@app.get("/api/webhooks", response_model=List[schemas.WebhookResponse])
+def list_webhooks(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    return db.query(models.Webhook).order_by(models.Webhook.created_at.desc()).all()
+
+
+@app.post("/api/webhooks", response_model=schemas.WebhookResponse, status_code=201)
+def create_webhook(body: schemas.WebhookCreate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    webhook = models.Webhook(
+        name=body.name,
+        url=body.url,
+        events=",".join(body.events),
+        is_active=body.is_active,
+        created_by=admin.id,
+    )
+    db.add(webhook)
+    db.commit()
+    db.refresh(webhook)
+    log_activity(db, user_id=admin.id, action="webhook.create", detail=f"Webhook '{webhook.name}' created")
+    return webhook
+
+
+@app.put("/api/webhooks/{webhook_id}", response_model=schemas.WebhookResponse)
+def update_webhook(webhook_id: int, body: schemas.WebhookUpdate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    webhook = db.query(models.Webhook).filter(models.Webhook.id == webhook_id).first()
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    for field in ("name", "url", "is_active"):
+        value = getattr(body, field, None)
+        if value is not None:
+            setattr(webhook, field, value)
+    if body.events is not None:
+        webhook.events = ",".join(body.events)
+    db.commit()
+    db.refresh(webhook)
+    return webhook
+
+
+@app.delete("/api/webhooks/{webhook_id}", status_code=204)
+def delete_webhook(webhook_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    webhook = db.query(models.Webhook).filter(models.Webhook.id == webhook_id).first()
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    log_activity(db, user_id=admin.id, action="webhook.delete", detail=f"Webhook '{webhook.name}' deleted")
+    db.delete(webhook)
+    db.commit()
+    return None
+
+
+@app.post("/api/webhooks/{webhook_id}/test")
+async def test_webhook(webhook_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    webhook = db.query(models.Webhook).filter(models.Webhook.id == webhook_id).first()
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                webhook.url,
+                json={"event": "webhook.test", "data": {"message": "Webhook test ping from Wings Panel"}, "timestamp": datetime.now(timezone.utc).isoformat()},
+                headers={"Content-Type": "application/json", "User-Agent": "wings-panel-webhook/1.0"},
+            )
+            return {"status": resp.status_code, "ok": resp.status_code < 400, "detail": resp.text[:500]}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Webhook delivery failed: {e}")
+
+
+# =============================================================================
+# ANNOUNCEMENT ENDPOINTS
+# =============================================================================
+@app.get("/api/announcements", response_model=List[schemas.AnnouncementResponse])
+def list_announcements(
+    include_inactive: bool = Query(False),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    query = db.query(models.Announcement)
+    if not include_inactive or not user.root_admin:
+        query = query.filter(models.Announcement.is_active == True)
+    return query.order_by(models.Announcement.created_at.desc()).all()
+
+
+@app.post("/api/announcements", response_model=schemas.AnnouncementResponse, status_code=201)
+def create_announcement(body: schemas.AnnouncementCreate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    announcement = models.Announcement(
+        title=body.title,
+        content=body.content,
+        color=body.color,
+        is_active=body.is_active,
+        created_by=admin.id,
+    )
+    db.add(announcement)
+    db.commit()
+    db.refresh(announcement)
+    log_activity(db, user_id=admin.id, action="announcement.create", detail=f"Announcement '{announcement.title}' created")
+    return announcement
+
+
+@app.put("/api/announcements/{announcement_id}", response_model=schemas.AnnouncementResponse)
+def update_announcement(announcement_id: int, body: schemas.AnnouncementUpdate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    announcement = db.query(models.Announcement).filter(models.Announcement.id == announcement_id).first()
+    if not announcement:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    for field in ("title", "content", "color", "is_active"):
+        value = getattr(body, field, None)
+        if value is not None:
+            setattr(announcement, field, value)
+    db.commit()
+    db.refresh(announcement)
+    return announcement
+
+
+@app.delete("/api/announcements/{announcement_id}", status_code=204)
+def delete_announcement(announcement_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    announcement = db.query(models.Announcement).filter(models.Announcement.id == announcement_id).first()
+    if not announcement:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    log_activity(db, user_id=admin.id, action="announcement.delete", detail=f"Announcement '{announcement.title}' deleted")
+    db.delete(announcement)
+    db.commit()
+    return None
+
+
+# =============================================================================
+# PANEL SETTINGS ENDPOINTS
+# =============================================================================
+def _get_setting(db: Session, key: str, default: str = "") -> str:
+    row = db.query(models.PanelSetting).filter(models.PanelSetting.key == key).first()
+    return row.value if row else default
+
+
+def _set_setting(db: Session, key: str, value: str):
+    row = db.query(models.PanelSetting).filter(models.PanelSetting.key == key).first()
+    if row:
+        row.value = value
+    else:
+        db.add(models.PanelSetting(key=key, value=value))
+    db.commit()
+
+
+@app.get("/api/settings")
+def get_panel_settings(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    return {
+        "site_name": _get_setting(db, "site_name", "Wings Panel"),
+        "maintenance_mode": _get_setting(db, "maintenance_mode", "false") == "true",
+        "registration_enabled": _get_setting(db, "registration_enabled", "true") == "true",
+        "default_theme": _get_setting(db, "default_theme", "dark"),
+    }
+
+
+@app.put("/api/settings", response_model=dict)
+def update_panel_settings(body: schemas.PanelSettingsUpdate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    if body.site_name is not None:
+        _set_setting(db, "site_name", body.site_name)
+    if body.maintenance_mode is not None:
+        _set_setting(db, "maintenance_mode", "true" if body.maintenance_mode else "false")
+    if body.registration_enabled is not None:
+        _set_setting(db, "registration_enabled", "true" if body.registration_enabled else "false")
+    if body.default_theme is not None:
+        _set_setting(db, "default_theme", body.default_theme)
+    log_activity(db, user_id=admin.id, action="panel.settings_update", detail="Panel settings updated")
+    return get_panel_settings(db, admin)
+
+
+# =============================================================================
+# DOCKER IMAGES (proxied to daemon)
+# =============================================================================
+@app.get("/api/system/images")
+async def list_docker_images(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    node = db.query(models.Node).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="No node configured")
+    return await call_daemon(node, "/api/system/images", method="GET")
+
+
+@app.delete("/api/system/images/{image_name:path}", status_code=204)
+async def remove_docker_image(image_name: str, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    node = db.query(models.Node).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="No node configured")
+    await call_daemon(node, f"/api/system/images/{quote(image_name, safe='')}", method="DELETE")
+    log_activity(db, user_id=admin.id, action="docker.image_remove", detail=f"Docker image '{image_name}' removed")
     return None

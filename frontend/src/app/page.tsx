@@ -6,9 +6,9 @@ import {
   Layers, PlusCircle, RotateCw, Power, Trash2, FileText, ChevronRight,
   Plus, RefreshCw, Play, Square, Skull, LogOut, User, Shield,
   Network, Settings, Save, X, CheckCircle, AlertTriangle, Info,
-  Activity, Key, Copy,
+  Activity,   Key, Copy,
   RotateCcw, PauseCircle, ArrowRight, Bug, Coffee, Users, Sun, Moon,
-  Download, Upload, Pencil, Settings2, Share2
+  Download, Upload, Pencil, Settings2, Share2, LayoutDashboard, Send, Box
 } from 'lucide-react'
 import type { Terminal as XTermTerminal } from 'xterm'
 import type { FitAddon as XTermFitAddon } from '@xterm/addon-fit'
@@ -19,7 +19,7 @@ const API_BASE = process.env.NEXT_PUBLIC_PANEL_URL || 'http://localhost:8000'
 interface Server {
   id: number; uuid: string; name: string; description?: string; owner_id: number;
   node_id: number; primary_allocation_id: number; cpu_limit: number; memory_limit: number;
-  disk_limit: number; docker_image: string; startup_command: string; status: string;
+  disk_limit: number; docker_image: string; docker_network?: string; startup_command: string; status: string;
   installed: boolean; allocations?: any[]; group_id?: number | null
 }
 
@@ -67,7 +67,7 @@ export default function Dashboard() {
   const [authPassword, setAuthPassword] = useState('')
   const [authError, setAuthError] = useState('')
 
-  const [activeTab, setActiveTab] = useState<'servers' | 'nodes' | 'allocations' | 'create-server' | 'system' | 'activity' | 'api-keys' | 'users' | 'settings'>('servers')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'servers' | 'nodes' | 'allocations' | 'create-server' | 'system' | 'activity' | 'api-keys' | 'users' | 'templates' | 'webhooks' | 'settings'>('dashboard')
   const [nodes, setNodes] = useState<Node[]>([])
   const [servers, setServers] = useState<Server[]>([])
   const [allocations, setAllocations] = useState<Allocation[]>([])
@@ -166,14 +166,14 @@ export default function Dashboard() {
   const [userEditPass, setUserEditPass] = useState('')
   const [userEditAdmin, setUserEditAdmin] = useState(false)
 
-  const [settingsTab, setSettingsTab] = useState<'profile' | 'security'>('profile')
+  const [settingsTab, setSettingsTab] = useState<'profile' | 'security' | 'panel'>('profile')
   const [settingsEmail, setSettingsEmail] = useState('')
   const [settingsNewPass, setSettingsNewPass] = useState('')
   const [settingsConfirmPass, setSettingsConfirmPass] = useState('')
   const [selectedServerIds, setSelectedServerIds] = useState<number[]>([])
   const [bulkAction, setBulkAction] = useState('')
 
-  const [detailTab, setDetailTab] = useState<'console' | 'files' | 'logs' | 'schedules'>('console')
+  const [detailTab, setDetailTab] = useState<'console' | 'files' | 'logs' | 'schedules' | 'backups' | 'members' | 'stats' | 'activity'>('console')
 
   const [logsContent, setLogsContent] = useState('')
   const [logsLoading, setLogsLoading] = useState(false)
@@ -242,6 +242,51 @@ export default function Dashboard() {
   const [bugReportDesc, setBugReportDesc] = useState('')
   const [bugReportSeverity, setBugReportSeverity] = useState('medium')
   const [bugReportLoading, setBugReportLoading] = useState(false)
+
+  // Backups
+  const [backups, setBackups] = useState<any[]>([])
+  const [backupsLoading, setBackupsLoading] = useState(false)
+  const [creatingBackup, setCreatingBackup] = useState(false)
+
+  // Live stats
+  const [liveStats, setLiveStats] = useState<any>(null)
+  const [statsLoading, setStatsLoading] = useState(false)
+  const statsTimerRef = useRef<any>(null)
+
+  // Per-server activity
+  const [serverActivity, setServerActivity] = useState<ActivityLogEntry[]>([])
+
+  // Templates
+  const [templates, setTemplates] = useState<any[]>([])
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false)
+  const [templateForm, setTemplateForm] = useState<any>({ name: '', description: '', docker_image: 'itzg/minecraft-server', docker_network: 'pterodactyl-net', startup_command: '', cpu_limit: 100, memory_limit: 2048, disk_limit: 10240, alloc_port: 25565, featured: false })
+  const [templateSaving, setTemplateSaving] = useState(false)
+  const [editingTemplate, setEditingTemplate] = useState<number | null>(null)
+
+  // Webhooks
+  const [webhooks, setWebhooks] = useState<any[]>([])
+  const [showWebhookDialog, setShowWebhookDialog] = useState(false)
+  const [webhookForm, setWebhookForm] = useState<any>({ name: '', url: '', events: ['server.created'], is_active: true })
+  const [webhookSaving, setWebhookSaving] = useState(false)
+  const [editingWebhook, setEditingWebhook] = useState<number | null>(null)
+
+  // Announcements
+  const [announcements, setAnnouncements] = useState<any[]>([])
+  const [showAnnouncementDialog, setShowAnnouncementDialog] = useState(false)
+  const [announcementForm, setAnnouncementForm] = useState<any>({ title: '', content: '', color: '#38bdf8', is_active: true })
+  const [announcementSaving, setAnnouncementSaving] = useState(false)
+  const [editingAnnouncement, setEditingAnnouncement] = useState<number | null>(null)
+
+  // Panel settings
+  const [panelSettings, setPanelSettings] = useState<any>({ site_name: 'Wings Panel', maintenance_mode: false, registration_enabled: true, default_theme: 'dark' })
+
+  // Docker images
+  const [dockerImages, setDockerImages] = useState<any[]>([])
+  const [imagesLoading, setImagesLoading] = useState(false)
+  const [dockerImagesError, setDockerImagesError] = useState<string | null>(null)
+
+  // Node ping results
+  const [nodePings, setNodePings] = useState<{ [nodeId: number]: { ok: boolean; detail: string; ms: number } }>({})
   const [bugReports, setBugReports] = useState<any[]>([])
   const [showBugList, setShowBugList] = useState(false)
 
@@ -316,9 +361,27 @@ export default function Dashboard() {
       if (activeTab === 'system') {
         try { const cfRes = await apiFetch('/api/cloudflare/dns/list'); if (cfRes.ok) { const d = await cfRes.json(); setCloudflareRecords(d.records || []) } } catch {}
         try { const ptRes = await apiFetch('/api/playit/tunnel/list'); if (ptRes.ok) { const d = await ptRes.json(); setPlayitTunnels(d.tunnels || []) } } catch {}
+        try { const imgRes = await apiFetch('/api/system/images'); if (imgRes.ok) setDockerImages(await imgRes.json()) } catch {}
       }
+      if (activeTab === 'dashboard') {
+        try { const actRes = await apiFetch('/api/activity?limit=8'); if (actRes.ok) setActivityLogs(await actRes.json()) } catch {}
+        try { const annRes = await apiFetch('/api/announcements'); if (annRes.ok) setAnnouncements(await annRes.json()) } catch {}
+      }
+      if (activeTab === 'templates') { try { await fetchTemplates() } catch {} }
+      if (activeTab === 'webhooks') { try { await fetchWebhooks() } catch {} }
+      if (activeTab === 'settings') { try { await fetchPanelSettings() } catch {} }
     } catch (e) { console.error(e) }
   }
+
+  useEffect(() => { if (activeTab === 'dashboard' || activeTab === 'templates' || activeTab === 'webhooks' || activeTab === 'settings') fetchAll() }, [activeTab])
+
+  useEffect(() => {
+    if (!selectedServer) return
+    if (detailTab === 'backups') fetchBackups(selectedServer.id)
+    if (detailTab === 'members') fetchMembers(selectedServer.id)
+    if (detailTab === 'stats') { startStatsPolling(selectedServer.id); return () => stopStatsPolling() }
+    if (detailTab === 'activity') fetchServerActivity(selectedServer.id)
+  }, [selectedServer, detailTab])
 
   useEffect(() => {
     if (!selectedServer) { cleanupConsole(); return }
@@ -569,6 +632,224 @@ export default function Dashboard() {
     showPopup('confirm', 'Remove Access', `Remove "${member.username}" from this server?`, async () => {
       try { const res = await apiFetch(`/api/servers/${selectedServer!.id}/members/${member.id}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Removed', 'Access removed.'); fetchMembers(selectedServer!.id) } } catch {}
     })
+  }
+
+  const updateMemberPerms = async (member: any, perms: string[]) => {
+    if (!selectedServer) return
+    try {
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/members/${member.id}/permissions`, { method: 'POST', body: JSON.stringify({ permissions: perms.join(',') }) })
+      if (res.ok) { showPopup('success', 'Updated', 'Permissions updated.'); fetchMembers(selectedServer.id) }
+    } catch {}
+  }
+
+  // --- Backups ---
+  const fetchBackups = async (serverId: number) => {
+    setBackupsLoading(true)
+    try { const res = await apiFetch(`/api/servers/${serverId}/backups`); if (res.ok) setBackups(await res.json()) } catch {}
+    setBackupsLoading(false)
+  }
+
+  const createBackup = async () => {
+    if (!selectedServer) return
+    setCreatingBackup(true)
+    try {
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/backups`, { method: 'POST', body: JSON.stringify({}) })
+      if (res.ok) { showPopup('success', 'Backup Started', 'Backup created. It may take a moment to complete.'); fetchBackups(selectedServer.id) }
+      else { const e = await res.json(); showPopup('error', 'Backup Failed', e.detail || 'Failed to create backup') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setCreatingBackup(false)
+  }
+
+  const restoreBackup = async (backupId: string) => {
+    if (!selectedServer) return
+    showPopup('confirm', 'Restore Backup', 'Restore this backup? This overwrites current server files.', async () => {
+      try {
+        const res = await apiFetch(`/api/servers/${selectedServer!.id}/backups/${backupId}/restore`, { method: 'POST' })
+        if (res.ok) { showPopup('success', 'Restored', 'Backup restored.'); fetchBackups(selectedServer!.id) }
+        else { const e = await res.json(); showPopup('error', 'Restore Failed', e.detail || 'Failed to restore backup') }
+      } catch { showPopup('error', 'Error', 'Connection failed') }
+    })
+  }
+
+  const deleteBackup = async (backupId: string) => {
+    if (!selectedServer) return
+    showPopup('confirm', 'Delete Backup', 'Delete this backup file? This cannot be undone.', async () => {
+      try {
+        const res = await apiFetch(`/api/servers/${selectedServer!.id}/backups/${backupId}`, { method: 'DELETE' })
+        if (res.ok) { showPopup('success', 'Deleted', 'Backup removed.'); fetchBackups(selectedServer!.id) }
+        else { const e = await res.json(); showPopup('error', 'Delete Failed', e.detail || 'Failed to delete backup') }
+      } catch { showPopup('error', 'Error', 'Connection failed') }
+    })
+  }
+
+  // --- Live stats ---
+  const fetchLiveStats = async (serverId: number) => {
+    try { const res = await apiFetch(`/api/servers/${serverId}/stats`); if (res.ok) { const d = await res.json(); setLiveStats(d); setStats({ cpu: d.cpu_percentage || 0, memory: d.memory_mb || 0, disk: d.disk_mb || 0, status: d.status || 'offline' }) } } catch {}
+  }
+
+  const startStatsPolling = (serverId: number) => {
+    if (statsTimerRef.current) clearInterval(statsTimerRef.current)
+    fetchLiveStats(serverId)
+    statsTimerRef.current = setInterval(() => fetchLiveStats(serverId), 3000)
+  }
+
+  const stopStatsPolling = () => {
+    if (statsTimerRef.current) { clearInterval(statsTimerRef.current); statsTimerRef.current = null }
+  }
+
+  // --- Per-server activity ---
+  const fetchServerActivity = async (serverId: number) => {
+    try { const res = await apiFetch(`/api/servers/${serverId}/activity?limit=20`); if (res.ok) setServerActivity(await res.json()) } catch {}
+  }
+
+  // --- Templates ---
+  const fetchTemplates = async () => {
+    try { const res = await apiFetch('/api/templates'); if (res.ok) setTemplates(await res.json()) } catch {}
+  }
+
+  const applyTemplate = (t: any) => {
+    setFormImage(t.docker_image || 'itzg/minecraft-server')
+    setFormNetwork(t.docker_network || 'pterodactyl-net')
+    setFormStartup(t.startup_command || '')
+    setFormStartupAuto(false)
+    setFormCpu(t.cpu_limit || 100)
+    setFormMemory(t.memory_limit || 2048)
+    setFormDisk(t.disk_limit || 10240)
+    setActiveTab('create-server')
+    showPopup('success', 'Template Applied', `"${t.name}" applied to the deploy form.`)
+  }
+
+  const saveTemplateFromCurrent = async () => {
+    if (!selectedServer) return
+    const t = templateForm
+    try {
+      const res = await apiFetch('/api/templates', { method: 'POST', body: JSON.stringify({ name: t.name, description: t.description, docker_image: t.docker_image, docker_network: t.docker_network, startup_command: t.startup_command, cpu_limit: Number(t.cpu_limit), memory_limit: Number(t.memory_limit), disk_limit: Number(t.disk_limit), alloc_port: t.alloc_port ? Number(t.alloc_port) : undefined, featured: !!t.featured }) })
+      if (res.ok) { showPopup('success', 'Saved', `Template "${t.name}" created.`); setShowTemplateDialog(false); setTemplateForm({ name: '', description: '', docker_image: selectedServer.docker_image, docker_network: selectedServer.docker_network, startup_command: selectedServer.startup_command || '', cpu_limit: selectedServer.cpu_limit, memory_limit: selectedServer.memory_limit, disk_limit: selectedServer.disk_limit, alloc_port: selectedServer.allocations?.[0]?.port, featured: false }); fetchTemplates() }
+      else { const e = await res.json(); showPopup('error', 'Save Failed', e.detail || 'Failed to create template') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const saveTemplate = async () => {
+    setTemplateSaving(true)
+    try {
+      const body = { name: templateForm.name, description: templateForm.description, docker_image: templateForm.docker_image, docker_network: templateForm.docker_network, startup_command: templateForm.startup_command, cpu_limit: Number(templateForm.cpu_limit), memory_limit: Number(templateForm.memory_limit), disk_limit: Number(templateForm.disk_limit), alloc_port: templateForm.alloc_port ? Number(templateForm.alloc_port) : undefined, featured: !!templateForm.featured }
+      const res = editingTemplate
+        ? await apiFetch(`/api/templates/${editingTemplate}`, { method: 'PUT', body: JSON.stringify(body) })
+        : await apiFetch('/api/templates', { method: 'POST', body: JSON.stringify(body) })
+      if (res.ok) { showPopup('success', 'Saved', 'Template saved.'); setShowTemplateDialog(false); setEditingTemplate(null); setTemplateForm({ name: '', description: '', docker_image: 'itzg/minecraft-server', docker_network: 'pterodactyl-net', startup_command: '', cpu_limit: 100, memory_limit: 2048, disk_limit: 10240, alloc_port: 25565, featured: false }); fetchTemplates() }
+      else { const e = await res.json(); showPopup('error', 'Save Failed', e.detail || 'Failed to save template') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setTemplateSaving(false)
+  }
+
+  const deleteTemplate = async (id: number, name: string) => {
+    showPopup('confirm', 'Delete Template', `Delete template "${name}"?`, async () => {
+      try { const res = await apiFetch(`/api/templates/${id}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', 'Template removed.'); fetchTemplates() } } catch {}
+    })
+  }
+
+  // --- Webhooks ---
+  const fetchWebhooks = async () => {
+    try { const res = await apiFetch('/api/webhooks'); if (res.ok) setWebhooks(await res.json()) } catch {}
+  }
+
+  const toggleWebhookEvent = (event: string) => {
+    setWebhookForm((prev: any) => ({ ...prev, events: prev.events.includes(event) ? prev.events.filter((e: string) => e !== event) : [...prev.events, event] }))
+  }
+
+  const saveWebhook = async () => {
+    if (!webhookForm.name.trim() || !webhookForm.url.trim()) { showPopup('error', 'Missing Info', 'Name and URL are required'); return }
+    if (!webhookForm.url.startsWith('http')) { showPopup('error', 'Invalid URL', 'Webhook URL must start with http:// or https://'); return }
+    setWebhookSaving(true)
+    try {
+      const body = { name: webhookForm.name, url: webhookForm.url, events: webhookForm.events.join(','), is_active: webhookForm.is_active }
+      const res = editingWebhook
+        ? await apiFetch(`/api/webhooks/${editingWebhook}`, { method: 'PUT', body: JSON.stringify(body) })
+        : await apiFetch('/api/webhooks', { method: 'POST', body: JSON.stringify(body) })
+      if (res.ok) { showPopup('success', 'Saved', 'Webhook saved.'); setShowWebhookDialog(false); setEditingWebhook(null); setWebhookForm({ name: '', url: '', events: ['server.created'], is_active: true }); fetchWebhooks() }
+      else { const e = await res.json(); showPopup('error', 'Save Failed', e.detail || 'Failed to save webhook') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setWebhookSaving(false)
+  }
+
+  const deleteWebhook = async (id: number, name: string) => {
+    showPopup('confirm', 'Delete Webhook', `Delete webhook "${name}"?`, async () => {
+      try { const res = await apiFetch(`/api/webhooks/${id}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', 'Webhook removed.'); fetchWebhooks() } } catch {}
+    })
+  }
+
+  const testWebhook = async (id: number) => {
+    try {
+      const res = await apiFetch(`/api/webhooks/${id}/test`, { method: 'POST' })
+      if (res.ok) { const d = await res.json(); showPopup(d.ok ? 'success' : 'error', d.ok ? 'Delivered' : 'Failed', d.ok ? `Webhook delivered (HTTP ${d.status}).` : `Webhook responded with HTTP ${d.status}.`) }
+      else { const e = await res.json(); showPopup('error', 'Test Failed', e.detail || 'Failed to send test') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  // --- Announcements ---
+  const fetchAnnouncements = async () => {
+    try { const res = await apiFetch('/api/announcements'); if (res.ok) setAnnouncements(await res.json()) } catch {}
+  }
+
+  const saveAnnouncement = async () => {
+    if (!announcementForm.title.trim()) { showPopup('error', 'Missing Title', 'Enter an announcement title'); return }
+    setAnnouncementSaving(true)
+    try {
+      const res = editingAnnouncement
+        ? await apiFetch(`/api/announcements/${editingAnnouncement}`, { method: 'PUT', body: JSON.stringify(announcementForm) })
+        : await apiFetch('/api/announcements', { method: 'POST', body: JSON.stringify(announcementForm) })
+      if (res.ok) { showPopup('success', 'Saved', 'Announcement saved.'); setShowAnnouncementDialog(false); setEditingAnnouncement(null); setAnnouncementForm({ title: '', content: '', color: '#38bdf8', is_active: true }); fetchAnnouncements() }
+      else { const e = await res.json(); showPopup('error', 'Save Failed', e.detail || 'Failed to save announcement') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setAnnouncementSaving(false)
+  }
+
+  const deleteAnnouncement = async (id: number, title: string) => {
+    showPopup('confirm', 'Delete Announcement', `Delete announcement "${title}"?`, async () => {
+      try { const res = await apiFetch(`/api/announcements/${id}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', 'Announcement removed.'); fetchAnnouncements() } } catch {}
+    })
+  }
+
+  // --- Panel settings ---
+  const fetchPanelSettings = async () => {
+    try { const res = await apiFetch('/api/settings'); if (res.ok) setPanelSettings(await res.json()) } catch {}
+  }
+
+  const savePanelSettings = async () => {
+    try {
+      const res = await apiFetch('/api/settings', { method: 'PUT', body: JSON.stringify({ site_name: panelSettings.site_name, maintenance_mode: panelSettings.maintenance_mode, registration_enabled: panelSettings.registration_enabled, default_theme: panelSettings.default_theme }) })
+      if (res.ok) { showPopup('success', 'Saved', 'Panel settings updated.'); fetchPanelSettings() }
+      else { const e = await res.json(); showPopup('error', 'Save Failed', e.detail || 'Failed to update settings') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  // --- Docker images ---
+  const fetchDockerImages = async () => {
+    setImagesLoading(true)
+    try { const res = await apiFetch('/api/system/images'); if (res.ok) { setDockerImages(await res.json()); setDockerImagesError(null) } else { const e = await res.json().catch(() => null); setDockerImagesError(e?.detail || 'Failed to load images') } } catch { setDockerImagesError('Daemon unreachable') }
+    setImagesLoading(false)
+  }
+
+  const removeDockerImage = async (name: string) => {
+    showPopup('confirm', 'Remove Image', `Remove Docker image "${name}"? This frees disk space but the image may be needed by running servers.`, async () => {
+      try {
+        const res = await apiFetch(`/api/system/images/${encodeURIComponent(name)}`, { method: 'DELETE' })
+        if (res.ok) { showPopup('success', 'Removed', `Image "${name}" removed.`); fetchDockerImages() }
+        else { const e = await res.json(); showPopup('error', 'Remove Failed', e.detail || 'Failed to remove image') }
+      } catch { showPopup('error', 'Error', 'Connection failed') }
+    })
+  }
+
+  // --- Node ping ---
+  const pingNode = async (nodeId: number) => {
+    setNodePings(prev => ({ ...prev, [nodeId]: { ok: false, detail: 'Pinging...', ms: 0 } }))
+    try {
+      const start = Date.now()
+      const res = await apiFetch(`/api/nodes/${nodeId}/ping`)
+      const ms = Date.now() - start
+      if (res.ok) { const d = await res.json(); setNodePings(prev => ({ ...prev, [nodeId]: { ok: true, detail: d.detail || 'Online', ms } })) }
+      else { const e = await res.json(); setNodePings(prev => ({ ...prev, [nodeId]: { ok: false, detail: e.detail || 'Unreachable', ms } })) }
+    } catch { setNodePings(prev => ({ ...prev, [nodeId]: { ok: false, detail: 'Unreachable', ms: 0 } })) }
   }
 
   // Cloudflare DNS functions
@@ -920,6 +1201,7 @@ export default function Dashboard() {
       <aside className="sidebar">
         <div className="logo"><Layers size={24} /><span>WINGS PANEL</span></div>
         <nav className="nav-links">
+          <button onClick={() => { setActiveTab('dashboard'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'dashboard' ? 'active' : ''}`}><LayoutDashboard size={18} /><span>Dashboard</span></button>
           <button onClick={() => { setActiveTab('servers'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'servers' && !selectedServer ? 'active' : ''}`}><ServerIcon size={18} /><span>Servers</span></button>
           {user.root_admin && <button onClick={() => { setActiveTab('nodes'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'nodes' ? 'active' : ''}`}><Network size={18} /><span>Nodes</span></button>}
           {user.root_admin && <button onClick={() => { setActiveTab('allocations'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'allocations' ? 'active' : ''}`}><Settings size={18} /><span>Allocations</span></button>}
@@ -927,6 +1209,8 @@ export default function Dashboard() {
           <button onClick={() => { setActiveTab('activity'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'activity' ? 'active' : ''}`}><Activity size={18} /><span>Activity</span></button>
           <button onClick={() => { setActiveTab('api-keys'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'api-keys' ? 'active' : ''}`}><Key size={18} /><span>API Keys</span></button>
           {user.root_admin && <button onClick={() => { setActiveTab('users'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'users' ? 'active' : ''}`}><Users size={18} /><span>Users</span></button>}
+          {user.root_admin && <button onClick={() => { setActiveTab('templates'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'templates' ? 'active' : ''}`}><FileText size={18} /><span>Templates</span></button>}
+          {user.root_admin && <button onClick={() => { setActiveTab('webhooks'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'webhooks' ? 'active' : ''}`}><Share2 size={18} /><span>Webhooks</span></button>}
           <button onClick={() => { setActiveTab('create-server'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'create-server' ? 'active' : ''}`}><PlusCircle size={18} /><span>Deploy</span></button>
           <button onClick={() => { setActiveTab('settings'); setSelectedServer(null) }} className={`nav-link ${activeTab === 'settings' ? 'active' : ''}`}><User size={18} /><span>Settings</span></button>
         </nav>
@@ -952,7 +1236,130 @@ export default function Dashboard() {
         </header>
         <div className="page-content">
         {!selectedServer ? (<>
-{activeTab === 'servers' && (
+{activeTab === 'dashboard' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h1 className="header-title">Dashboard</h1><p className="header-desc">Welcome back, {user.username} — panel overview</p></div>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <button onClick={fetchAll} className="btn btn-outline"><RefreshCw size={16} /><span>Refresh</span></button>
+                  </div>
+                </div>
+
+                {announcements.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
+                    {announcements.slice(0, 3).map(a => (
+                      <div key={a.id} style={{ border: `1px solid ${a.color || '#38bdf8'}55`, background: `${a.color || '#38bdf8'}11`, borderRadius: '10px', padding: '14px 18px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: a.color || '#38bdf8', marginTop: '5px', flexShrink: 0 }}></div>
+                        <div style={{ flex: 1 }}>
+                          <p style={{ fontWeight: 600, fontSize: '0.95rem' }}>{a.title}</p>
+                          {a.content && <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '4px' }}>{a.content}</p>}
+                          <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '6px' }}>{new Date(a.created_at).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="card-grid">
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <ServerIcon size={22} style={{ color: 'var(--color-primary)', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--color-primary)' }}>{systemStatus?.total_servers ?? servers.length}</p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Total Servers</p>
+                  </div>
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <Play size={22} style={{ color: 'var(--color-success)', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--color-success)' }}>{systemStatus?.running_servers ?? servers.filter(s => s.status === 'running').length}</p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Running</p>
+                  </div>
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <Network size={22} style={{ color: 'var(--color-secondary)', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--color-secondary)' }}>{systemStatus?.active_nodes ?? 0}<span style={{ fontSize: '1rem', color: 'var(--text-muted)' }}>/{systemStatus?.total_nodes ?? 0}</span></p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Nodes</p>
+                  </div>
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <Layers size={22} style={{ color: '#fbbf24', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: '#fbbf24' }}>{systemStatus?.used_allocations ?? 0}<span style={{ fontSize: '1rem', color: 'var(--text-muted)' }}>/{systemStatus?.total_allocations ?? 0}</span></p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Allocations</p>
+                  </div>
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <Users size={22} style={{ color: 'var(--text-main)', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--text-main)' }}>{systemStatus?.total_users ?? 0}</p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Users</p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '24px', marginTop: '24px' }}>
+                  <div>
+                    <div className="card" style={{ marginBottom: '24px' }}>
+                      <div className="header-wrapper">
+                        <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Recent Activity</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Latest actions across the panel</p></div>
+                        <button onClick={() => setActiveTab('activity')} className="btn btn-outline">View All</button>
+                      </div>
+                      {activityLogs.length === 0 ? (
+                        <p style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>No activity recorded yet.</p>
+                      ) : (
+                        activityLogs.slice(0, 8).map(entry => (
+                          <div key={entry.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 0', borderBottom: '1px solid var(--border-color)' }}>
+                            <Activity size={14} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p style={{ fontSize: '0.85rem' }}><strong>{entry.username || `User #${entry.user_id}`}</strong> <span style={{ color: 'var(--text-muted)' }}>{entry.action}{entry.server_name ? ` · ${entry.server_name}` : ''}</span></p>
+                              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{entry.created_at ? new Date(entry.created_at).toLocaleString() : ''}</p>
+                            </div>
+                            {entry.detail && <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>{entry.detail}</p>}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    {nodeSummaries.length > 0 && (
+                      <div className="card">
+                        <div className="header-wrapper">
+                          <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Node Health</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Live status across nodes</p></div>
+                          {user.root_admin && <button onClick={() => setActiveTab('nodes')} className="btn btn-outline">Manage</button>}
+                        </div>
+                        {nodeSummaries.map(ns => (
+                          <div key={ns.node_id} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 0', borderBottom: '1px solid var(--border-color)' }}>
+                            <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: systemStatus?.daemon_reachable ? 'var(--color-success)' : 'var(--color-danger)', flexShrink: 0 }}></div>
+                            <div style={{ flex: 1, minWidth: 0 }}><p style={{ fontWeight: 600 }}>{ns.node_name}</p><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{ns.total_servers} servers · {ns.used_allocations}/{ns.total_allocations} allocations</p></div>
+                            <span className={`status-pill ${systemStatus?.daemon_reachable ? 'running' : 'stopped'}`}>{systemStatus?.daemon_reachable ? 'Online' : 'Offline'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="card" style={{ marginBottom: '24px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                        <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: systemStatus?.daemon_reachable ? 'var(--color-success)' : 'var(--color-danger)' }}></div>
+                        <div><p style={{ fontWeight: 600 }}>{systemStatus?.daemon_reachable ? 'Daemon Connected' : 'Daemon Unreachable'}</p><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{systemStatus?.daemon_version ? `v${systemStatus.daemon_version}` : 'version unknown'}</p></div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '8px 0', borderTop: '1px solid var(--border-color)' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Panel Version</span><span style={{ fontWeight: 600 }}>v{systemStatus?.panel_version || '1.0.0'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '8px 0', borderTop: '1px solid var(--border-color)' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Active Nodes</span><span style={{ fontWeight: 600 }}>{systemStatus?.active_nodes ?? 0} / {systemStatus?.total_nodes ?? 0}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '8px 0', borderTop: '1px solid var(--border-color)' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Allocations Used</span><span style={{ fontWeight: 600 }}>{systemStatus?.used_allocations ?? 0} / {systemStatus?.total_allocations ?? 0}</span>
+                      </div>
+                    </div>
+                    <div className="card">
+                      <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '4px' }}>Quick Actions</h3>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px' }}>Common tasks</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <button onClick={() => setActiveTab('create-server')} className="btn btn-primary" style={{ justifyContent: 'flex-start' }}><PlusCircle size={16} /><span>Deploy a Server</span></button>
+                        <button onClick={() => setActiveTab('servers')} className="btn btn-outline" style={{ justifyContent: 'flex-start' }}><ServerIcon size={16} /><span>Manage Servers</span></button>
+                        <button onClick={() => setActiveTab('system')} className="btn btn-outline" style={{ justifyContent: 'flex-start' }}><Cpu size={16} /><span>System Status</span></button>
+                        {user.root_admin && <button onClick={() => setActiveTab('allocations')} className="btn btn-outline" style={{ justifyContent: 'flex-start' }}><Settings size={16} /><span>Allocations</span></button>}
+                        {user.root_admin && <button onClick={() => setActiveTab('users')} className="btn btn-outline" style={{ justifyContent: 'flex-start' }}><Users size={16} /><span>Manage Users</span></button>}
+                        <button onClick={() => setActiveTab('settings')} className="btn btn-outline" style={{ justifyContent: 'flex-start' }}><User size={16} /><span>Settings</span></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'servers' && (
               <div>
                 <div className="header-wrapper">
                   <div><h1 className="header-title">Servers</h1><p className="header-desc">{servers.length} server{servers.length !== 1 ? 's' : ''} deployed</p></div>
@@ -1081,7 +1488,7 @@ export default function Dashboard() {
                 )}
                 <div className="card" style={{ padding: 0 }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
-                    <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}><th style={{ padding: '16px' }}>Name</th><th style={{ padding: '16px' }}>Address</th><th style={{ padding: '16px' }}>Port</th><th style={{ padding: '16px' }}>Status</th></tr></thead>
+                    <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}><th style={{ padding: '16px' }}>Name</th><th style={{ padding: '16px' }}>Address</th><th style={{ padding: '16px' }}>Port</th><th style={{ padding: '16px' }}>Status</th><th style={{ padding: '16px' }}>Latency</th><th style={{ padding: '16px', textAlign: 'right' }}></th></tr></thead>
                     <tbody>
                       {nodes.map(n => (
                         <tr key={n.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -1089,6 +1496,12 @@ export default function Dashboard() {
                           <td style={{ padding: '16px' }}>{n.fqdn} ({n.ip_address})</td>
                           <td style={{ padding: '16px' }}>{n.daemon_port}</td>
                           <td style={{ padding: '16px' }}><span className="status-pill running"><span className="status-glow"></span>{n.is_active ? 'Active' : 'Inactive'}</span></td>
+                          <td style={{ padding: '16px' }}>
+                            {nodePings[n.id] ? <span style={{ color: nodePings[n.id].ok ? 'var(--color-success)' : 'var(--color-danger)', fontSize: '0.8rem' }}>{nodePings[n.id].ok ? `${nodePings[n.id].ms}ms` : nodePings[n.id].detail || 'Unreachable'}</span> : <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>—</span>}
+                          </td>
+                          <td style={{ padding: '16px', textAlign: 'right' }}>
+                            <button onClick={() => pingNode(n.id)} className="btn btn-outline" style={{ padding: '4px 10px', fontSize: '0.8rem' }}><Activity size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />Ping</button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1216,10 +1629,34 @@ export default function Dashboard() {
                          </div>
                        ))}
                      </div>
-                   ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No groups created yet</p>)}
-                 </div>
-               </div>
-             )}
+                    ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No groups created yet</p>)}
+                  </div>
+                  <div className="card" style={{ marginTop: '24px' }}>
+                    <div className="header-wrapper">
+                      <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Docker Images</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Images available on the daemon host</p></div>
+                      <button onClick={fetchDockerImages} className="btn btn-outline"><RefreshCw size={14} /><span>Refresh</span></button>
+                    </div>
+                    {dockerImages.length > 0 ? (
+                      <div style={{ display: 'grid', gap: '8px' }}>
+                        {dockerImages.map(img => (
+                          <div key={img.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                              <Box size={16} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+                              <div style={{ minWidth: 0 }}>
+                                <p style={{ fontWeight: 600, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.tags && img.tags.length > 0 ? img.tags.join(', ') : img.id}</p>
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{img.id.slice(0, 12)} — {img.size > 0 ? `${(img.size / 1024 / 1024 / 1024).toFixed(2)} GB` : 'unknown size'}</p>
+                              </div>
+                            </div>
+                            <button onClick={() => removeDockerImage(img.id)} className="btn btn-danger" style={{ padding: '4px 10px', fontSize: '0.8rem', flexShrink: 0 }}>Remove</button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : dockerImagesError ? (
+                      <p style={{ color: 'var(--color-danger)', fontSize: '0.85rem' }}>{dockerImagesError}</p>
+                    ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No images found</p>)}
+                  </div>
+                </div>
+              )}
 
             {activeTab === 'activity' && (
               <div>
@@ -1473,6 +1910,131 @@ export default function Dashboard() {
               </div>
             )}
 {/*_PART2_MARKER_*/}
+            {activeTab === 'templates' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h1 className="header-title">Server Templates</h1><p className="header-desc">Reusable configurations for quick deployments</p></div>
+                  <button onClick={() => { setEditingTemplate(null); setTemplateForm({ name: '', description: '', docker_image: 'itzg/minecraft-server', docker_network: 'pterodactyl-net', startup_command: '', cpu_limit: 100, memory_limit: 2048, disk_limit: 10240, alloc_port: 25565, featured: false }); setShowTemplateDialog(true) }} className="btn btn-primary"><Plus size={16} /><span>New Template</span></button>
+                </div>
+                {templates.length === 0 ? (
+                  <div className="card" style={{ textAlign: 'center', padding: '60px', color: 'var(--text-muted)' }}>No templates yet. Create one or use "Save as Template" on a server.</div>
+                ) : (
+                  <div className="card-grid">
+                    {templates.map(t => (
+                      <div key={t.id} className="card">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                          <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>{t.name} {t.featured && <span style={{ fontSize: '0.65rem', color: 'var(--color-secondary)', border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.1)', padding: '1px 6px', borderRadius: '4px', verticalAlign: 'middle' }}>FEATURED</span>}</h3>
+                        </div>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', minHeight: '38px', marginBottom: '16px' }}>{t.description || 'No description'}</p>
+                        <div style={{ display: 'flex', gap: '12px', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px', flexWrap: 'wrap' }}>
+                          <span><Layers size={14} style={{ verticalAlign: 'middle' }} /> {t.docker_image}</span>
+                          <span><Cpu size={14} style={{ verticalAlign: 'middle' }} /> {t.cpu_limit}%</span>
+                          <span><HardDrive size={14} style={{ verticalAlign: 'middle' }} /> {t.memory_limit} MB</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button onClick={() => applyTemplate(t)} className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}>Use Template</button>
+                          <button onClick={() => { setEditingTemplate(t.id); setTemplateForm({ name: t.name, description: t.description || '', docker_image: t.docker_image, docker_network: t.docker_network, startup_command: t.startup_command || '', cpu_limit: t.cpu_limit, memory_limit: t.memory_limit, disk_limit: t.disk_limit, alloc_port: t.alloc_port, featured: t.featured }); setShowTemplateDialog(true) }} className="btn btn-outline" style={{ padding: '8px 12px' }}><Pencil size={14} /></button>
+                          <button onClick={() => deleteTemplate(t.id, t.name)} className="btn btn-danger" style={{ padding: '8px 12px' }}><Trash2 size={14} /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {showTemplateDialog && (
+                  <div className="popup-overlay" onClick={() => setShowTemplateDialog(false)}>
+                    <div className="popup-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '560px' }}>
+                      <h3 className="popup-title">{editingTemplate ? 'Edit Template' : 'New Template'}</h3>
+                      <div className="form-group"><label className="form-label">Name</label><input className="form-control" value={templateForm.name} onChange={e => setTemplateForm({ ...templateForm, name: e.target.value })} /></div>
+                      <div className="form-group"><label className="form-label">Description</label><textarea className="form-control" rows={2} value={templateForm.description} onChange={e => setTemplateForm({ ...templateForm, description: e.target.value })} /></div>
+                      <div className="form-group"><label className="form-label">Docker Image</label><input className="form-control" value={templateForm.docker_image} onChange={e => setTemplateForm({ ...templateForm, docker_image: e.target.value })} /></div>
+                      <div className="form-group"><label className="form-label">Network</label><input className="form-control" value={templateForm.docker_network} onChange={e => setTemplateForm({ ...templateForm, docker_network: e.target.value })} /></div>
+                      <div className="form-group"><label className="form-label">Startup Command</label><input className="form-control" value={templateForm.startup_command} onChange={e => setTemplateForm({ ...templateForm, startup_command: e.target.value })} /></div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px' }}>
+                        <div className="form-group"><label className="form-label">CPU %</label><input className="form-control" type="number" value={templateForm.cpu_limit} onChange={e => setTemplateForm({ ...templateForm, cpu_limit: Number(e.target.value) })} /></div>
+                        <div className="form-group"><label className="form-label">Memory MB</label><input className="form-control" type="number" value={templateForm.memory_limit} onChange={e => setTemplateForm({ ...templateForm, memory_limit: Number(e.target.value) })} /></div>
+                        <div className="form-group"><label className="form-label">Disk MB</label><input className="form-control" type="number" value={templateForm.disk_limit} onChange={e => setTemplateForm({ ...templateForm, disk_limit: Number(e.target.value) })} /></div>
+                        <div className="form-group"><label className="form-label">Port</label><input className="form-control" type="number" value={templateForm.alloc_port || ''} onChange={e => setTemplateForm({ ...templateForm, alloc_port: e.target.value ? Number(e.target.value) : null })} /></div>
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={templateForm.featured} onChange={e => setTemplateForm({ ...templateForm, featured: e.target.checked })} style={{ accentColor: 'var(--color-primary)' }} /> Featured (shown first)
+                      </label>
+                      <div className="popup-actions">
+                        <button className="btn btn-outline" onClick={() => setShowTemplateDialog(false)}>Cancel</button>
+                        <button className="btn btn-primary" onClick={saveTemplate} disabled={templateSaving}>{templateSaving ? 'Saving...' : 'Save Template'}</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'webhooks' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h1 className="header-title">Webhooks</h1><p className="header-desc">Send event notifications to external endpoints</p></div>
+                  <button onClick={() => { setEditingWebhook(null); setWebhookForm({ name: '', url: '', events: ['server.created'], is_active: true }); setShowWebhookDialog(true) }} className="btn btn-primary"><Plus size={16} /><span>New Webhook</span></button>
+                </div>
+                {webhooks.length === 0 ? (
+                  <div className="card" style={{ textAlign: 'center', padding: '60px', color: 'var(--text-muted)' }}>No webhooks configured. Webhooks fire on server create, power, and delete events.</div>
+                ) : (
+                  <div className="card" style={{ padding: 0 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                      <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Name</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>URL</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Events</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Active</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'right' }}></th>
+                      </tr></thead>
+                      <tbody>
+                        {webhooks.map(h => (
+                          <tr key={h.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '12px 14px', fontWeight: 600 }}>{h.name}</td>
+                            <td style={{ padding: '12px 14px', fontSize: '0.8rem', color: 'var(--text-muted)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.url}</td>
+                            <td style={{ padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                {h.events.split(',').map((ev: string) => <span key={ev} style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '4px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)' }}>{ev.trim()}</span>)}
+                              </div>
+                            </td>
+                            <td style={{ padding: '12px 14px' }}><span style={{ color: h.is_active ? 'var(--color-success)' : 'var(--text-muted)' }}>{h.is_active ? 'Active' : 'Paused'}</span></td>
+                            <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              <button onClick={() => testWebhook(h.id)} className="btn btn-outline" style={{ padding: '4px 8px', marginRight: '8px' }} title="Send test ping"><Send size={14} /></button>
+                              <button onClick={() => { setEditingWebhook(h.id); setWebhookForm({ name: h.name, url: h.url, events: h.events.split(','), is_active: h.is_active }); setShowWebhookDialog(true) }} className="btn btn-outline" style={{ padding: '4px 8px', marginRight: '8px' }}><Pencil size={14} /></button>
+                              <button onClick={() => deleteWebhook(h.id, h.name)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {showWebhookDialog && (
+                  <div className="popup-overlay" onClick={() => setShowWebhookDialog(false)}>
+                    <div className="popup-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+                      <h3 className="popup-title">{editingWebhook ? 'Edit Webhook' : 'New Webhook'}</h3>
+                      <div className="form-group"><label className="form-label">Name</label><input className="form-control" value={webhookForm.name} onChange={e => setWebhookForm({ ...webhookForm, name: e.target.value })} /></div>
+                      <div className="form-group"><label className="form-label">URL</label><input className="form-control" value={webhookForm.url} onChange={e => setWebhookForm({ ...webhookForm, url: e.target.value })} placeholder="https://example.com/hook" /></div>
+                      <div className="form-group"><label className="form-label">Events</label>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          {['server.created', 'server.deleted', 'server.power.start', 'server.power.stop', 'server.power.restart', 'server.power.kill'].map(ev => {
+                            const has = webhookForm.events.includes(ev)
+                            return <button key={ev} type="button" onClick={() => toggleWebhookEvent(ev)} style={{ padding: '5px 12px', borderRadius: '6px', fontSize: '0.8rem', border: has ? '1px solid var(--color-primary)' : '1px solid var(--border-color)', background: has ? 'rgba(56,189,248,0.1)' : 'transparent', color: has ? 'var(--color-primary)' : 'var(--text-muted)', cursor: 'pointer' }}>{ev}</button>
+                          })}
+                        </div>
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={webhookForm.is_active} onChange={e => setWebhookForm({ ...webhookForm, is_active: e.target.checked })} style={{ accentColor: 'var(--color-primary)' }} /> Active
+                      </label>
+                      <div className="popup-actions">
+                        <button className="btn btn-outline" onClick={() => setShowWebhookDialog(false)}>Cancel</button>
+                        <button className="btn btn-primary" onClick={saveWebhook} disabled={webhookSaving}>{webhookSaving ? 'Saving...' : 'Save Webhook'}</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {activeTab === 'settings' && (
               <div style={{ maxWidth: '600px' }}>
                 <div className="header-wrapper">
@@ -1481,6 +2043,7 @@ export default function Dashboard() {
                 <div className="tabs-container" style={{ marginBottom: '24px' }}>
                   <button onClick={() => setSettingsTab('profile')} className={`tab-btn ${settingsTab === 'profile' ? 'active' : ''}`}><User size={16} /> Profile</button>
                   <button onClick={() => setSettingsTab('security')} className={`tab-btn ${settingsTab === 'security' ? 'active' : ''}`}><Shield size={16} /> Security</button>
+                  {user.root_admin && <button onClick={() => setSettingsTab('panel')} className={`tab-btn ${settingsTab === 'panel' ? 'active' : ''}`}><Settings2 size={16} /> Panel</button>}
                 </div>
                 {settingsTab === 'profile' && (
                   <div className="card">
@@ -1514,6 +2077,70 @@ export default function Dashboard() {
                     </div>
                   </div>
                 )}
+                {settingsTab === 'panel' && user.root_admin && (
+                  <div>
+                    <div className="card" style={{ marginBottom: '24px' }}>
+                      <h3 style={{ marginBottom: '16px' }}>Panel Settings</h3>
+                      <div className="form-group"><label className="form-label">Site Name</label><input className="form-control" value={panelSettings.site_name || ''} onChange={e => setPanelSettings({ ...panelSettings, site_name: e.target.value })} /></div>
+                      <div className="form-group"><label className="form-label">Default Theme</label><select className="form-control" value={panelSettings.default_theme || 'dark'} onChange={e => setPanelSettings({ ...panelSettings, default_theme: e.target.value })}><option value="dark">Dark</option><option value="light">Light</option></select></div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={!!panelSettings.maintenance_mode} onChange={e => setPanelSettings({ ...panelSettings, maintenance_mode: e.target.checked })} style={{ accentColor: 'var(--color-primary)' }} /> Maintenance mode (blocks login)
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={!!panelSettings.registration_enabled} onChange={e => setPanelSettings({ ...panelSettings, registration_enabled: e.target.checked })} style={{ accentColor: 'var(--color-primary)' }} /> Allow registration
+                      </label>
+                      <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                        <button onClick={savePanelSettings} className="btn btn-primary"><Save size={16} /> Save Panel Settings</button>
+                      </div>
+                    </div>
+                    <div className="card" style={{ padding: 0 }}>
+                      <div className="header-wrapper" style={{ padding: '16px' }}>
+                        <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Announcements</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Banners shown on the dashboard</p></div>
+                        <button onClick={() => { setEditingAnnouncement(null); setAnnouncementForm({ title: '', content: '', color: '#38bdf8', is_active: true }); setShowAnnouncementDialog(true) }} className="btn btn-primary"><Plus size={14} /><span>New Announcement</span></button>
+                      </div>
+                      <div style={{ padding: '0 16px 16px' }}>
+                        {announcements.length === 0 ? (
+                          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No announcements</p>
+                        ) : (
+                          <div style={{ display: 'grid', gap: '8px' }}>
+                            {announcements.map(a => (
+                              <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                                  <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: a.color || '#38bdf8', flexShrink: 0 }}></div>
+                                  <div style={{ minWidth: 0 }}>
+                                    <p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{a.title} {!a.is_active && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>(hidden)</span>}</p>
+                                    {a.content && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.content}</p>}
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                                  <button onClick={() => { setEditingAnnouncement(a.id); setAnnouncementForm({ title: a.title, content: a.content || '', color: a.color || '#38bdf8', is_active: a.is_active }); setShowAnnouncementDialog(true) }} className="btn btn-outline" style={{ padding: '4px 8px' }}><Pencil size={14} /></button>
+                                  <button onClick={() => deleteAnnouncement(a.id, a.title)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {showAnnouncementDialog && (
+                      <div className="popup-overlay" onClick={() => setShowAnnouncementDialog(false)}>
+                        <div className="popup-box" onClick={e => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+                          <h3 className="popup-title">{editingAnnouncement ? 'Edit Announcement' : 'New Announcement'}</h3>
+                          <div className="form-group"><label className="form-label">Title</label><input className="form-control" value={announcementForm.title} onChange={e => setAnnouncementForm({ ...announcementForm, title: e.target.value })} /></div>
+                          <div className="form-group"><label className="form-label">Content</label><textarea className="form-control" rows={3} value={announcementForm.content} onChange={e => setAnnouncementForm({ ...announcementForm, content: e.target.value })} /></div>
+                          <div className="form-group"><label className="form-label">Color</label><input type="color" value={announcementForm.color} onChange={e => setAnnouncementForm({ ...announcementForm, color: e.target.value })} style={{ width: '60px', height: '34px', padding: 0, background: 'transparent', border: '1px solid var(--border-color)', borderRadius: '6px' }} /></div>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '0.85rem' }}>
+                            <input type="checkbox" checked={!!announcementForm.is_active} onChange={e => setAnnouncementForm({ ...announcementForm, is_active: e.target.checked })} style={{ accentColor: 'var(--color-primary)' }} /> Active
+                          </label>
+                          <div className="popup-actions">
+                            <button className="btn btn-outline" onClick={() => setShowAnnouncementDialog(false)}>Cancel</button>
+                            <button className="btn btn-primary" onClick={saveAnnouncement} disabled={announcementSaving}>{announcementSaving ? 'Saving...' : 'Save Announcement'}</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 </>) : (<div>
@@ -1540,6 +2167,7 @@ export default function Dashboard() {
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={() => openSettingsDialog(selectedServer)} className="btn btn-outline"><Settings2 size={16} /><span>Settings</span></button>
                 {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => openShareDialog(selectedServer)} className="btn btn-outline"><Share2 size={16} /><span>Share</span></button>}
+                {user.root_admin && <button onClick={() => { setTemplateForm({ name: `${selectedServer.name} Template`, description: selectedServer.description || '', docker_image: selectedServer.docker_image, docker_network: selectedServer.docker_network, startup_command: selectedServer.startup_command || '', cpu_limit: selectedServer.cpu_limit, memory_limit: selectedServer.memory_limit, disk_limit: selectedServer.disk_limit, alloc_port: selectedServer.allocations?.[0]?.port, featured: false }); setShowTemplateDialog(true) }} className="btn btn-outline"><FileText size={16} /><span>Save as Template</span></button>}
               </div>
               <div style={{ height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
               <div style={{ display: 'flex', gap: '24px' }}>
@@ -1821,9 +2449,13 @@ export default function Dashboard() {
             )}
             <div className="tabs-container">
               <button onClick={() => setDetailTab('console')} className={`tab-btn ${detailTab === 'console' ? 'active' : ''}`}><TerminalIcon size={16} /> Console</button>
+              <button onClick={() => setDetailTab('stats')} className={`tab-btn ${detailTab === 'stats' ? 'active' : ''}`}><Cpu size={16} /> Stats</button>
               <button onClick={() => setDetailTab('files')} className={`tab-btn ${detailTab === 'files' ? 'active' : ''}`}><Folder size={16} /> Files</button>
+              <button onClick={() => { setDetailTab('backups'); fetchBackups(selectedServer.id) }} className={`tab-btn ${detailTab === 'backups' ? 'active' : ''}`}><HardDrive size={16} /> Backups</button>
+              <button onClick={() => setDetailTab('members')} className={`tab-btn ${detailTab === 'members' ? 'active' : ''}`}><Users size={16} /> Members</button>
               <button onClick={() => { setDetailTab('logs'); fetchLogs(selectedServer.id) }} className={`tab-btn ${detailTab === 'logs' ? 'active' : ''}`}><Bug size={16} /> Logs</button>
               <button onClick={() => { setDetailTab('schedules'); fetchSchedules(selectedServer.id) }} className={`tab-btn ${detailTab === 'schedules' ? 'active' : ''}`}><Activity size={16} /> Schedules</button>
+              <button onClick={() => { setDetailTab('activity'); fetchServerActivity(selectedServer.id) }} className={`tab-btn ${detailTab === 'activity' ? 'active' : ''}`}><FileText size={16} /> Activity</button>
             </div>
 
             {detailTab === 'console' && (
@@ -1922,6 +2554,168 @@ export default function Dashboard() {
                     </table>
                   </div>
                 )}
+              </div>
+            )}
+
+            {detailTab === 'stats' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Live Resource Usage</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Auto-refreshing every 3 seconds</p></div>
+                  <button onClick={() => fetchLiveStats(selectedServer.id)} className="btn btn-outline"><RefreshCw size={14} /><span>Refresh Now</span></button>
+                </div>
+                <div className="card-grid">
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <Cpu size={22} style={{ color: 'var(--color-primary)', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--color-primary)' }}>{Math.round((liveStats?.cpu_percentage || 0) * 100) / 100}%</p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>CPU Usage</p>
+                    <div style={{ height: '8px', borderRadius: '4px', background: 'var(--border-color)', overflow: 'hidden', marginTop: '12px' }}>
+                      <div style={{ width: `${Math.min(100, liveStats?.cpu_percentage || 0)}%`, height: '100%', background: 'var(--color-primary)' }}></div>
+                    </div>
+                  </div>
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <HardDrive size={22} style={{ color: 'var(--color-secondary)', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--color-secondary)' }}>{Math.round(liveStats?.memory_mb || 0)}<span style={{ fontSize: '1rem', color: 'var(--text-muted)' }}> / {liveStats?.memory_limit_mb || selectedServer.memory_limit} MB</span></p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Memory</p>
+                    <div style={{ height: '8px', borderRadius: '4px', background: 'var(--border-color)', overflow: 'hidden', marginTop: '12px' }}>
+                      <div style={{ width: `${Math.min(100, ((liveStats?.memory_mb || 0) / (liveStats?.memory_limit_mb || selectedServer.memory_limit || 1)) * 100)}%`, height: '100%', background: 'var(--color-secondary)' }}></div>
+                    </div>
+                  </div>
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <Layers size={22} style={{ color: '#fbbf24', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '2rem', fontWeight: 700, color: '#fbbf24' }}>{Math.round(liveStats?.disk_mb || 0)}<span style={{ fontSize: '1rem', color: 'var(--text-muted)' }}> / {selectedServer.disk_limit} MB</span></p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Disk</p>
+                    <div style={{ height: '8px', borderRadius: '4px', background: 'var(--border-color)', overflow: 'hidden', marginTop: '12px' }}>
+                      <div style={{ width: `${Math.min(100, ((liveStats?.disk_mb || 0) / (selectedServer.disk_limit || 1)) * 100)}%`, height: '100%', background: '#fbbf24' }}></div>
+                    </div>
+                  </div>
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <Power size={22} style={{ color: (liveStats?.status || 'offline') === 'running' ? 'var(--color-success)' : 'var(--color-danger)', margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '1.6rem', fontWeight: 700, color: (liveStats?.status || 'offline') === 'running' ? 'var(--color-success)' : 'var(--color-danger)', textTransform: 'capitalize' }}>{liveStats?.status || 'offline'}</p>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Container Status</p>
+                  </div>
+                </div>
+                {liveStats && (
+                  <div className="card" style={{ marginTop: '24px' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '12px' }}>Raw Stats</h3>
+                    <pre style={{ fontSize: '0.8rem', color: 'var(--text-muted)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, fontFamily: 'var(--font-mono)' }}>{JSON.stringify(liveStats, null, 2)}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {detailTab === 'backups' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Backups</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Snapshot and restore server files</p></div>
+                  <button onClick={createBackup} className="btn btn-primary" disabled={creatingBackup}><HardDrive size={14} /><span>{creatingBackup ? 'Creating...' : 'Create Backup'}</span></button>
+                </div>
+                {backupsLoading ? (
+                  <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading backups...</div>
+                ) : backups.length === 0 ? (
+                  <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>No backups yet. Create one to snapshot the server files.</div>
+                ) : (
+                  <div className="card" style={{ padding: 0 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                      <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Name</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Size</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Created</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'right' }}></th>
+                      </tr></thead>
+                      <tbody>
+                        {backups.map((b: any) => (
+                          <tr key={b.id || b.name} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{b.name || b.id}</td>
+                            <td style={{ padding: '12px 14px' }}>{b.size ? `${(b.size / 1048576).toFixed(1)} MB` : '—'}</td>
+                            <td style={{ padding: '12px 14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{b.created_at ? new Date(b.created_at).toLocaleString() : '—'}</td>
+                            <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              <button onClick={() => restoreBackup(b.id)} className="btn btn-outline" style={{ padding: '4px 10px', marginRight: '8px' }}><RotateCcw size={14} /><span>Restore</span></button>
+                              <button onClick={() => deleteBackup(b.id)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {detailTab === 'members' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Members</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Users with access to this server</p></div>
+                </div>
+                <div className="card" style={{ marginBottom: '24px', display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: '220px' }}>
+                    <label className="form-label">Username or Email</label>
+                    <input className="form-control" value={shareUsername} onChange={e => setShareUsername(e.target.value)} placeholder="Share with user..." />
+                  </div>
+                  <button onClick={addMember} className="btn btn-primary"><Plus size={14} /><span>Add Member</span></button>
+                </div>
+                {members.length === 0 ? (
+                  <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>No members. Only the owner has access.</div>
+                ) : (
+                  <div className="card" style={{ padding: 0 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                      <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>User</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Permissions</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'right' }}></th>
+                      </tr></thead>
+                      <tbody>
+                        {members.map((m: any) => (
+                          <tr key={m.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '12px 14px' }}><strong>{m.username}</strong> <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>({m.email})</span></td>
+                            <td style={{ padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {(['console', 'power', 'files', 'schedules', 'logs'] as const).map(p => {
+                                  const has = (m.permissions || '').split(',').map((x: string) => x.trim()).includes(p)
+                                  return (
+                                    <button key={p} onClick={() => updateMemberPerms(m, (m.permissions || '').split(',').map((x: string) => x.trim()).filter((x: string) => x !== p).concat(has ? [] : [p]))} style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.75rem', border: has ? '1px solid var(--color-primary)' : '1px solid var(--border-color)', background: has ? 'rgba(56,189,248,0.1)' : 'transparent', color: has ? 'var(--color-primary)' : 'var(--text-muted)', cursor: 'pointer' }}>{p}</button>
+                                  )
+                                })}
+                              </div>
+                            </td>
+                            <td style={{ padding: '12px 14px', textAlign: 'right' }}>
+                              <button onClick={() => removeMember(m)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {detailTab === 'activity' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Server Activity</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Recent actions on this server</p></div>
+                  <button onClick={() => fetchServerActivity(selectedServer.id)} className="btn btn-outline"><RefreshCw size={14} /><span>Refresh</span></button>
+                </div>
+                <div className="card" style={{ padding: 0 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                    <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                      <th style={{ padding: '12px 14px', textAlign: 'left' }}>Time</th>
+                      <th style={{ padding: '12px 14px', textAlign: 'left' }}>User</th>
+                      <th style={{ padding: '12px 14px', textAlign: 'left' }}>Action</th>
+                      <th style={{ padding: '12px 14px', textAlign: 'left' }}>Detail</th>
+                    </tr></thead>
+                    <tbody>
+                      {serverActivity.map(e => (
+                        <tr key={e.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td style={{ padding: '12px 14px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{e.created_at ? new Date(e.created_at).toLocaleString() : '—'}</td>
+                          <td style={{ padding: '12px 14px' }}>{e.username || e.user_id}</td>
+                          <td style={{ padding: '12px 14px' }}><span style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)', fontSize: '0.8rem' }}>{e.action}</span></td>
+                          <td style={{ padding: '12px 14px', color: 'var(--text-muted)' }}>{e.detail || '—'}</td>
+                        </tr>
+                      ))}
+                      {serverActivity.length === 0 && <tr><td colSpan={4} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No activity for this server yet.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 

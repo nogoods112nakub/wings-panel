@@ -279,3 +279,86 @@ class ServerMemberResponse(BaseModel):
 class ContainerLogsResponse(BaseModel):
     logs: str
     container_status: Optional[str] = None
+
+
+# --- Server Template Schemas ---
+class ServerTemplateBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    docker_image: Optional[str] = "itzg/minecraft-server"
+    docker_network: Optional[str] = "pterodactyl-net"
+    startup_command: Optional[str] = ""
+    cpu_limit: Optional[float] = 100.0
+    memory_limit: Optional[int] = 2048
+    disk_limit: Optional[int] = 10240
+    alloc_port: Optional[int] = None
+    featured: Optional[bool] = False
+
+class ServerTemplateCreate(ServerTemplateBase):
+    pass
+
+class ServerTemplateUpdate(ServerTemplateBase):
+    name: Optional[str] = None
+
+class ServerTemplateResponse(ServerTemplateBase):
+    id: int
+    created_by: Optional[int] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Webhook Schemas ---
+class WebhookBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    url: str = Field(..., min_length=5, max_length=500)
+    events: str = "server.created"
+    is_active: Optional[bool] = True
+
+class WebhookCreate(WebhookBase):
+    events: List[str] = ["server.created"]
+
+class WebhookUpdate(WebhookBase):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    events: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+class WebhookResponse(WebhookBase):
+    id: int
+    created_by: Optional[int] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Announcement Schemas ---
+class AnnouncementBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    content: Optional[str] = None
+    color: Optional[str] = "#38bdf8"
+    is_active: Optional[bool] = True
+
+class AnnouncementCreate(AnnouncementBase):
+    pass
+
+class AnnouncementUpdate(AnnouncementBase):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    color: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class AnnouncementResponse(AnnouncementBase):
+    id: int
+    created_by: Optional[int] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Panel Settings Schema ---
+class PanelSettingsUpdate(BaseModel):
+    site_name: Optional[str] = None
+    maintenance_mode: Optional[bool] = None
+    registration_enabled: Optional[bool] = None
+    default_theme: Optional[str] = None

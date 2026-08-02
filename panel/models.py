@@ -206,3 +206,72 @@ class BugReport(Base):
 
     def __repr__(self):
         return f"<BugReport id={self.id} title={self.title} status={self.status}>"
+
+
+class ServerTemplate(Base):
+    __tablename__ = 'server_templates'
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    docker_image = Column(String(255), nullable=False, default="itzg/minecraft-server")
+    docker_network = Column(String(255), nullable=False, default="pterodactyl-net")
+    startup_command = Column(Text, nullable=True, default="")
+    cpu_limit = Column(Float, nullable=False, default=100.0)
+    memory_limit = Column(Integer, nullable=False, default=2048)
+    disk_limit = Column(Integer, nullable=False, default=10240)
+    alloc_port = Column(Integer, nullable=True)
+    featured = Column(Boolean, default=False)
+    created_by = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    def __repr__(self):
+        return f"<ServerTemplate name={self.name}>"
+
+
+class Webhook(Base):
+    __tablename__ = 'webhooks'
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    url = Column(String(500), nullable=False)
+    events = Column(Text, nullable=False, default="server.created")
+    is_active = Column(Boolean, default=True)
+    created_by = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    def event_list(self) -> list:
+        return [e.strip() for e in (self.events or "").split(",") if e.strip()]
+
+    def __repr__(self):
+        return f"<Webhook name={self.name} url={self.url}>"
+
+
+class Announcement(Base):
+    __tablename__ = 'announcements'
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    content = Column(Text, nullable=True)
+    color = Column(String(7), nullable=True, default="#38bdf8")
+    is_active = Column(Boolean, default=True)
+    created_by = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    def __repr__(self):
+        return f"<Announcement id={self.id} title={self.title} active={self.is_active}>"
+
+
+class PanelSetting(Base):
+    __tablename__ = 'panel_settings'
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(100), nullable=False, unique=True, index=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    def __repr__(self):
+        return f"<PanelSetting key={self.key} value={self.value}>"
