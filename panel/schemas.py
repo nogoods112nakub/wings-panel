@@ -193,3 +193,90 @@ class ApiKeyResponse(BaseModel):
     created_at: datetime
     class Config:
         from_attributes = True
+
+
+# --- Bug Report Schemas ---
+class BugReportBase(BaseModel):
+    title: str = Field(..., max_length=500)
+    description: Optional[str] = None
+    severity: Optional[str] = Field("medium", max_length=20)
+    screenshot_url: Optional[str] = None
+    browser_info: Optional[str] = None
+
+class BugReportCreate(BugReportBase):
+    pass
+
+class BugReportResponse(BugReportBase):
+    id: int
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    status: str
+    ip_address: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Server Group Schemas ---
+class ServerGroupBase(BaseModel):
+    name: str = Field(..., max_length=255)
+    description: Optional[str] = None
+    color: Optional[str] = Field("#38bdf8", max_length=7)
+
+class ServerGroupCreate(ServerGroupBase):
+    pass
+
+class ServerGroupResponse(ServerGroupBase):
+    id: int
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Server Schedule Schemas ---
+class ServerScheduleBase(BaseModel):
+    server_id: int
+    action: str = Field(..., pattern=r"^(start|stop|kill|restart)$")
+    scheduled_time: datetime
+    recurring: bool = False
+    recurring_pattern: Optional[str] = None
+
+class ServerScheduleCreate(ServerScheduleBase):
+    pass
+
+class ServerScheduleResponse(ServerScheduleBase):
+    id: int
+    is_active: bool
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Server Sharing / Members Schema ---
+class ServerMemberBase(BaseModel):
+    permissions: Optional[str] = "console,power,files,schedules,logs"
+
+class ServerMemberCreate(BaseModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    user_id: Optional[int] = None
+    permissions: str = "console,power,files,schedules,logs"
+
+class ServerMemberResponse(BaseModel):
+    id: int
+    server_id: int
+    user_id: int
+    permissions: str
+    username: str
+    email: str
+    root_admin: bool = False
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Container Logs Schema ---
+class ContainerLogsResponse(BaseModel):
+    logs: str
+    container_status: Optional[str] = None

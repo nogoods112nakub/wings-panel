@@ -5,6 +5,9 @@
   --bg-main: #0a0d14;
   --bg-card: #121824;
   --bg-card-hover: #182030;
+  --bg-sidebar: #0d111b;
+  --bg-terminal: #07090e;
+  --bg-select: #1a2035;
   --border-color: rgba(255, 255, 255, 0.08);
   --border-glow: rgba(56, 189, 248, 0.15);
   
@@ -18,6 +21,41 @@
   --text-muted: #9ca3af;
   --font-sans: 'Inter', -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* --- Light Theme --- */
+html[data-theme="light"] {
+  --bg-main: #f5f7fa;
+  --bg-card: #ffffff;
+  --bg-card-hover: #eef2f7;
+  --bg-sidebar: #eef1f6;
+  --bg-terminal: #f0f3f8;
+  --bg-select: #ffffff;
+  --border-color: rgba(15, 23, 42, 0.12);
+  --border-glow: rgba(14, 165, 233, 0.2);
+
+  --color-primary: #0284c7;
+  --color-primary-hover: #0369a1;
+  --color-secondary: #7c3aed;
+  --color-success: #059669;
+  --color-danger: #dc2626;
+  --color-warning: #d97706;
+  --text-main: #0f172a;
+  --text-muted: #475569;
+}
+
+html[data-theme="light"] .topbar,
+html[data-theme="light"] .card,
+html[data-theme="light"] .popup-box {
+  background: #ffffff;
+}
+
+html[data-theme="light"] .terminal-header {
+  background-color: rgba(15, 23, 42, 0.04);
+}
+
+html[data-theme="light"] .status-pill {
+  border-color: rgba(15, 23, 42, 0.15);
 }
 
 * {
@@ -54,7 +92,7 @@ button {
 
 .sidebar {
   width: 260px;
-  background-color: #0d111b;
+  background-color: var(--bg-sidebar);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
@@ -378,7 +416,7 @@ button {
 
 /* --- Monospace Console / Terminal --- */
 .terminal-window {
-  background-color: #07090e;
+  background-color: var(--bg-terminal);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   display: flex;
@@ -532,7 +570,7 @@ select.form-control {
 }
 
 select.form-control option {
-  background-color: #1a2035;
+  background-color: var(--bg-select);
   color: var(--text-main);
   padding: 8px;
 }

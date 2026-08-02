@@ -19,6 +19,7 @@ class User(Base):
 
     servers = relationship("Server", back_populates="owner", foreign_keys="Server.owner_id")
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
+    member_servers = relationship("ServerMember", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User username={self.username} admin={self.root_admin}>"
@@ -70,6 +71,7 @@ class Server(Base):
     owner_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     node_id = Column(Integer, ForeignKey('nodes.id', ondelete='RESTRICT'), nullable=False)
     primary_allocation_id = Column(Integer, ForeignKey('allocations.id', ondelete='RESTRICT'), nullable=True)
+    group_id = Column(Integer, ForeignKey('server_groups.id', ondelete='SET NULL'), nullable=True)
 
     cpu_limit = Column(Float, nullable=False, default=100.0)
     memory_limit = Column(Integer, nullable=False, default=1024)
@@ -87,6 +89,9 @@ class Server(Base):
     owner = relationship("User", back_populates="servers", foreign_keys=[owner_id])
     allocations = relationship("Allocation", back_populates="server", foreign_keys=[Allocation.server_id])
     activity_logs = relationship("ActivityLog", primaryjoin="Server.id == ActivityLog.server_id", foreign_keys="ActivityLog.server_id", viewonly=True)
+    group = relationship("ServerGroup", back_populates="servers")
+    schedules = relationship("ServerSchedule", back_populates="server", cascade="all, delete-orphan")
+    members = relationship("ServerMember", back_populates="server", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Server uuid={self.uuid} name={self.name} status={self.status}>"
@@ -110,6 +115,61 @@ class ActivityLog(Base):
         return f"<ActivityLog action={self.action} user_id={self.user_id} server_id={self.server_id}>"
 
 
+class ServerGroup(Base):
+    __tablename__ = 'server_groups'
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    color = Column(String(7), nullable=True, default="#38bdf8")
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    servers = relationship("Server", back_populates="group", foreign_keys="Server.group_id")
+
+    def __repr__(self):
+        return f"<ServerGroup name={self.name}>"
+
+
+class ServerSchedule(Base):
+    __tablename__ = 'server_schedules'
+
+    id = Column(Integer, primary_key=True, index=True)
+    server_id = Column(Integer, ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    action = Column(String(20), nullable=False)
+    scheduled_time = Column(DateTime, nullable=False)
+    recurring = Column(Boolean, default=False)
+    recurring_pattern = Column(String(50), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    server = relationship("Server", back_populates="schedules")
+
+    def __repr__(self):
+        return f"<ServerSchedule server_id={self.server_id} action={self.action} scheduled={self.scheduled_time}>"
+
+
+class ServerMember(Base):
+    __tablename__ = 'server_members'
+
+    id = Column(Integer, primary_key=True, index=True)
+    server_id = Column(Integer, ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    permissions = Column(Text, nullable=False, default="console,power,files,schedules,logs")
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    server = relationship("Server", back_populates="members")
+    user = relationship("User", back_populates="member_servers")
+
+    def permission_list(self) -> list:
+        return [p.strip() for p in (self.permissions or "").split(",") if p.strip()]
+
+    def has_permission(self, perm: str) -> bool:
+        return perm in self.permission_list()
+
+    def __repr__(self):
+        return f"<ServerMember server_id={self.server_id} user_id={self.user_id} perms={self.permissions}>"
+
+
 class ApiKey(Base):
     __tablename__ = 'api_keys'
 
@@ -126,3 +186,23 @@ class ApiKey(Base):
 
     def __repr__(self):
         return f"<ApiKey name={self.name} user_id={self.user_id}>"
+
+
+class BugReport(Base):
+    __tablename__ = 'bug_reports'
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=True)
+    username = Column(String(255), nullable=True)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
+    severity = Column(String(20), nullable=True, default="medium")
+    status = Column(String(20), nullable=False, default="open")
+    screenshot_url = Column(Text, nullable=True)
+    browser_info = Column(Text, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    def __repr__(self):
+        return f"<BugReport id={self.id} title={self.title} status={self.status}>"

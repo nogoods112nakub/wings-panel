@@ -32,6 +32,7 @@ MIGRATIONS = [
     ("servers", "installed", "BOOLEAN", "FALSE"),
     ("servers", "description", "TEXT", "NULL"),
     ("servers", "docker_network", "VARCHAR(255)", "'pterodactyl-net'"),
+    ("servers", "group_id", "INTEGER", "NULL"),
 ]
 
 def column_exists(conn, table, column):

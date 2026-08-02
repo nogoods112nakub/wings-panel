@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -28,13 +29,17 @@ import (
 
 // Config holds the daemon options loaded from environment variables
 var (
-	DaemonToken    = getEnv("DAEMON_TOKEN", "secure_default_wings_api_key_123456")
-	ServersDir     = getEnv("SERVERS_DIR", getDefaultServersDir())
-	DockerURL      = getEnv("DOCKER_URL", getDefaultDockerURL())
-	HostServersDir = getEnv("HOST_SERVERS_DIR", ServersDir)
-	DockerNetwork  = getEnv("DOCKER_NETWORK", "pterodactyl-net")
-	ServerVolume   = getEnv("SERVER_VOLUME", "")
-	startTime      = time.Now()
+	DaemonToken       = getEnv("DAEMON_TOKEN", "secure_default_wings_api_key_123456")
+	ServersDir        = getEnv("SERVERS_DIR", getDefaultServersDir())
+	DockerURL         = getEnv("DOCKER_URL", getDefaultDockerURL())
+	HostServersDir    = getEnv("HOST_SERVERS_DIR", ServersDir)
+	DockerNetwork     = getEnv("DOCKER_NETWORK", "pterodactyl-net")
+	ServerVolume      = getEnv("SERVER_VOLUME", "")
+	CloudflareToken   = getEnv("CLOUDFLARE_API_TOKEN", "")
+	CloudflareZoneID  = getEnv("CLOUDFLARE_ZONE_ID", "")
+	PlayitClaimToken  = getEnv("PLAYIT_CLAIM_TOKEN", "")
+	PlayitAPIURL      = getEnv("PLAYIT_API_URL", "https://api.playit.gg")
+	startTime         = time.Now()
 )
 
 // ttyd process management
@@ -416,6 +421,12 @@ func main() {
 	http.HandleFunc("/api/system/build", handleDockerBuild)
 	http.HandleFunc("/api/servers", handleServers)
 	http.HandleFunc("/api/servers/", handleServerSpecific)
+
+	// Cloudflare DNS management
+	http.HandleFunc("/api/cloudflare/dns/", handleCloudflareDNS)
+
+	// Playit.gg tunnel management
+	http.HandleFunc("/api/playit/tunnel/", handlePlayitTunnel)
 
 	// Console (ttyd) management endpoints
 	http.HandleFunc("/api/console/", handleConsoleManagement)
@@ -1091,6 +1102,18 @@ func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Container logs endpoint
+	if subPath == "logs" && r.Method == http.MethodGet {
+		handleContainerLogs(w, r, uuid, cli, ctx)
+		return
+	}
+
+	// Clone server route
+	if subPath == "clone" && r.Method == http.MethodPost {
+		handleCloneServer(w, r, uuid, cli, ctx)
+		return
+	}
+
 	// Delete server route
 	if r.Method == http.MethodDelete && subPath == "" {
 		cli.ContainerRemove(ctx, containerName, types.ContainerRemoveOptions{Force: true})
@@ -1678,4 +1701,473 @@ func handleBackupRoutes(w http.ResponseWriter, r *http.Request, uuid string, sub
 	}
 
 	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+// handleContainerLogs returns the container's stdout/stderr logs
+func handleContainerLogs(w http.ResponseWriter, r *http.Request, uuid string, cli *client.Client, ctx context.Context) {
+	containerName := "wings-" + uuid
+	tailLines := r.URL.Query().Get("tail")
+	if tailLines == "" {
+		tailLines = "100"
+	}
+	since := r.URL.Query().Get("since")
+
+	logOptions := types.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     false,
+		Tail:       tailLines,
+		Details:    false,
+	}
+	if since != "" {
+		logOptions.Since = since
+	}
+
+	resp, err := cli.ContainerLogs(ctx, containerName, logOptions)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get logs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Close()
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	io.Copy(w, resp)
+}
+
+// handleCloneServer creates a new container based on an existing server's configuration
+func handleCloneServer(w http.ResponseWriter, r *http.Request, uuid string, cli *client.Client, ctx context.Context) {
+	containerName := "wings-" + uuid
+
+	inspect, err := cli.ContainerInspect(ctx, containerName)
+	if err != nil {
+		http.Error(w, "Source container not found", http.StatusNotFound)
+		return
+	}
+
+	image := inspect.Config.Image
+	if image == "" {
+		http.Error(w, "Could not determine source image", http.StatusBadRequest)
+		return
+	}
+
+	newUUID := generateUUID()
+	hostConfig := inspect.HostConfig
+	newContainerName := "wings-" + newUUID
+
+	cli.ContainerRemove(ctx, newContainerName, types.ContainerRemoveOptions{Force: true})
+
+	volumeName := "wings-" + newUUID
+	volumeBinds := []string{
+		fmt.Sprintf("%s:/data:rw", volumeName),
+		fmt.Sprintf("%s:/home/container:rw", volumeName),
+	}
+
+	portBindings := nat.PortMap{}
+	exposedPorts := nat.PortSet{}
+	for portStr := range inspect.Config.ExposedPorts {
+		tcpPort := nat.Port(portStr)
+		exposedPorts[tcpPort] = struct{}{}
+		portBindings[tcpPort] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: strings.Split(string(portStr), "/")[0]}}
+	}
+
+	envVars := inspect.Config.Env
+
+	config := &container.Config{
+		Image:        image,
+		User:         inspect.Config.User,
+		ExposedPorts: exposedPorts,
+		Env:          envVars,
+		WorkingDir:   inspect.Config.WorkingDir,
+		Tty:          false,
+		OpenStdin:    true,
+	}
+
+	resp, err := cli.ContainerCreate(ctx, config,
+		&container.HostConfig{
+			PortBindings: portBindings,
+			Binds:        volumeBinds,
+			Resources:    hostConfig.Resources,
+			NetworkMode:  hostConfig.NetworkMode,
+			RestartPolicy: container.RestartPolicy{
+				Name: "no",
+			},
+		},
+		&network.NetworkingConfig{},
+		nil,
+		newContainerName,
+	)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create cloned container: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if startErr := cli.ContainerStart(ctx, newContainerName, types.ContainerStartOptions{}); startErr != nil {
+		log.Printf("[CLONE] Container created but failed to start: %v", startErr)
+		http.Error(w, fmt.Sprintf("Failed to start cloned container: %v", startErr), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[CLONE] Server %s cloned to %s (ID: %s)", uuid, newUUID, resp.ID[:12])
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":       "cloned",
+		"source_uuid":  uuid,
+		"new_uuid":     newUUID,
+		"container_id": resp.ID[:12],
+		"image":        image,
+	})
+}
+
+// generateUUID creates a simple UUID-like string for cloned servers
+func generateUUID() string {
+	b := make([]byte, 16)
+	for i := range b {
+		b[i] = byte(rand.Intn(256))
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// --- Cloudflare DNS Management ---
+
+type CloudflareDNSRecord struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	TTL     int    `json:"ttl"`
+	Proxied bool   `json:"proxied"`
+}
+
+type CloudflareDNSCreateRequest struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	TTL     int    `json:"ttl"`
+	Proxied bool   `json:"proxied"`
+}
+
+type CloudflareDNSResponse struct {
+	Success  bool                `json:"success"`
+	Result   CloudflareDNSRecord `json:"result"`
+	Errors   []string            `json:"errors"`
+	Messages []string            `json:"messages"`
+}
+
+type CloudflareDNSListResponse struct {
+	Success  bool                     `json:"success"`
+	Result   []CloudflareDNSRecord    `json:"result"`
+	ResultInfo struct {
+		Page       int `json:"page"`
+		PerPage    int `json:"per_page"`
+		Count      int `json:"count"`
+		TotalCount int `json:"total_count"`
+	} `json:"result_info"`
+}
+
+func handleCloudflareDNS(w http.ResponseWriter, r *http.Request) {
+	if !verifyToken(w, r) {
+		return
+	}
+	if CloudflareToken == "" || CloudflareZoneID == "" {
+		http.Error(w, "Cloudflare not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/cloudflare/dns/"), "/"), "/")
+	if len(parts) < 1 {
+		http.Error(w, "Invalid path", http.StatusNotFound)
+		return
+	}
+	action := parts[0]
+
+	cli, err := getCloudflareClient()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	switch action {
+	case "list":
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		records, err := listCloudflareDNSRecords(cli)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to list records: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"records": records})
+
+	case "create":
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req CloudflareDNSCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		record, err := createCloudflareDNSRecord(cli, req)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to create record: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "record": record})
+
+	case "delete":
+		if r.Method != http.MethodDelete {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(parts) < 2 {
+			http.Error(w, "Record ID required", http.StatusBadRequest)
+			return
+		}
+		recordID := parts[1]
+		err := deleteCloudflareDNSRecord(cli, recordID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to delete record: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+
+	default:
+		http.Error(w, "Invalid action", http.StatusBadRequest)
+	}
+}
+
+func getCloudflareClient() (*http.Client, error) {
+	if CloudflareToken == "" {
+		return nil, fmt.Errorf("cloudflare API token not configured")
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	return client, nil
+}
+
+func cloudflareAPIRequest(client *http.Client, method, path string, body []byte) ([]byte, error) {
+	req, err := http.NewRequest(method, fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/%s", CloudflareZoneID, path), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", CloudflareToken))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("cloudflare API error %d: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
+}
+
+func listCloudflareDNSRecords(client *http.Client) ([]CloudflareDNSRecord, error) {
+	data, err := cloudflareAPIRequest(client, "GET", "dns_records?per_page=100", nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp CloudflareDNSListResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Result, nil
+}
+
+func createCloudflareDNSRecord(client *http.Client, req CloudflareDNSCreateRequest) (CloudflareDNSRecord, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return CloudflareDNSRecord{}, err
+	}
+	data, err := cloudflareAPIRequest(client, "POST", "dns_records", body)
+	if err != nil {
+		return CloudflareDNSRecord{}, err
+	}
+	var resp CloudflareDNSResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return CloudflareDNSRecord{}, err
+	}
+	return resp.Result, nil
+}
+
+func deleteCloudflareDNSRecord(client *http.Client, recordID string) error {
+	_, err := cloudflareAPIRequest(client, "DELETE", fmt.Sprintf("dns_records/%s", recordID), nil)
+	return err
+}
+
+// --- Playit.gg Tunnel Management ---
+
+type PlayitTunnel struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Port        int    `json:"port"`
+	Protocol    string `json:"protocol"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+	ExpiresAt   string `json:"expires_at"`
+	ClaimToken  string `json:"claim_token"`
+}
+
+type PlayitCreateTunnelRequest struct {
+	Name     string `json:"name"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+}
+
+type PlayitTunnelResponse struct {
+	Success bool       `json:"success"`
+	Tunnel  PlayitTunnel `json:"tunnel"`
+}
+
+type PlayitTunnelListResponse struct {
+	Success bool            `json:"success"`
+	Tunnels []PlayitTunnel  `json:"tunnels"`
+}
+
+func handlePlayitTunnel(w http.ResponseWriter, r *http.Request) {
+	if !verifyToken(w, r) {
+		return
+	}
+	if PlayitClaimToken == "" {
+		http.Error(w, "Playit.gg not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/playit/tunnel/"), "/"), "/")
+	if len(parts) < 1 {
+		http.Error(w, "Invalid path", http.StatusNotFound)
+		return
+	}
+	action := parts[0]
+
+	switch action {
+	case "list":
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		tunnels, err := listPlayitTunnels()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to list tunnels: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"tunnels": tunnels})
+
+	case "create":
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req PlayitCreateTunnelRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		tunnel, err := createPlayitTunnel(req)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to create tunnel: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "tunnel": tunnel})
+
+	case "delete":
+		if r.Method != http.MethodDelete {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(parts) < 2 {
+			http.Error(w, "Tunnel ID required", http.StatusBadRequest)
+			return
+		}
+		tunnelID := parts[1]
+		err := deletePlayitTunnel(tunnelID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to delete tunnel: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+
+	default:
+		http.Error(w, "Invalid action", http.StatusBadRequest)
+	}
+}
+
+func listPlayitTunnels() ([]PlayitTunnel, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/tunnels?claim_token=%s", PlayitAPIURL, PlayitClaimToken), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("playit API error %d: %s", resp.StatusCode, string(data))
+	}
+	var listResp PlayitTunnelListResponse
+	if err := json.Unmarshal(data, &listResp); err != nil {
+		return nil, err
+	}
+	return listResp.Tunnels, nil
+}
+
+func createPlayitTunnel(req PlayitCreateTunnelRequest) (PlayitTunnel, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return PlayitTunnel{}, err
+	}
+	httpReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/tunnels?claim_token=%s", PlayitAPIURL, PlayitClaimToken), bytes.NewReader(body))
+	if err != nil {
+		return PlayitTunnel{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return PlayitTunnel{}, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return PlayitTunnel{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return PlayitTunnel{}, fmt.Errorf("playit API error %d: %s", resp.StatusCode, string(data))
+	}
+	var createResp PlayitTunnelResponse
+	if err := json.Unmarshal(data, &createResp); err != nil {
+		return PlayitTunnel{}, err
+	}
+	return createResp.Tunnel, nil
+}
+
+func deletePlayitTunnel(tunnelID string) error {
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/api/tunnels/%s?claim_token=%s", PlayitAPIURL, tunnelID, PlayitClaimToken), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("playit API error %d: %s", resp.StatusCode, string(data))
+	}
+	return nil
 }

@@ -7,8 +7,11 @@ import {
   Plus, RefreshCw, Play, Square, Skull, LogOut, User, Shield,
   Network, Settings, Save, X, CheckCircle, AlertTriangle, Info,
   Activity, Key, Copy,
-  RotateCcw, PauseCircle, ArrowRight, Bug, Coffee, Users, Sparkles
+  RotateCcw, PauseCircle, ArrowRight, Bug, Coffee, Users, Sun, Moon,
+  Download, Upload, Pencil, Settings2, Share2
 } from 'lucide-react'
+import type { Terminal as XTermTerminal } from 'xterm'
+import type { FitAddon as XTermFitAddon } from '@xterm/addon-fit'
 
 
 const API_BASE = process.env.NEXT_PUBLIC_PANEL_URL || 'http://localhost:8000'
@@ -17,7 +20,7 @@ interface Server {
   id: number; uuid: string; name: string; description?: string; owner_id: number;
   node_id: number; primary_allocation_id: number; cpu_limit: number; memory_limit: number;
   disk_limit: number; docker_image: string; startup_command: string; status: string;
-  installed: boolean; allocations?: any[]
+  installed: boolean; allocations?: any[]; group_id?: number | null
 }
 
 interface Node {
@@ -69,19 +72,27 @@ export default function Dashboard() {
   const [servers, setServers] = useState<Server[]>([])
   const [allocations, setAllocations] = useState<Allocation[]>([])
   const [selectedServer, setSelectedServer] = useState<Server | null>(null)
-  const [detailTab, setDetailTab] = useState<'console' | 'files'>('console')
 
   const [stats, setStats] = useState({ cpu: 0, memory: 0, disk: 0, status: 'offline' })
 
   const [consoleUrl, setConsoleUrl] = useState('')
   const [consoleLoading, setConsoleLoading] = useState(false)
   const [consoleError, setConsoleError] = useState('')
+  const [consoleConnected, setConsoleConnected] = useState(false)
+  const terminalRef = useRef<XTermTerminal | null>(null)
+  const fitAddonRef = useRef<XTermFitAddon | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const terminalContainerRef = useRef<HTMLDivElement | null>(null)
 
   const [currentPath, setCurrentPath] = useState('')
   const [files, setFiles] = useState<FileEntry[]>([])
   const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null)
   const [newPathName, setNewPathName] = useState('')
   const [isCreatingFolder, setIsCreatingFolder] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const [formName, setFormName] = useState('')
   const [formDesc, setFormDesc] = useState('')
@@ -162,6 +173,78 @@ export default function Dashboard() {
   const [selectedServerIds, setSelectedServerIds] = useState<number[]>([])
   const [bulkAction, setBulkAction] = useState('')
 
+  const [detailTab, setDetailTab] = useState<'console' | 'files' | 'logs' | 'schedules'>('console')
+
+  const [logsContent, setLogsContent] = useState('')
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logsTail, setLogsTail] = useState(100)
+
+  const [showCloneDialog, setShowCloneDialog] = useState(false)
+  const [cloneName, setCloneName] = useState('')
+  const [cloning, setCloning] = useState(false)
+
+  const [showScheduleDialog, setShowScheduleDialog] = useState(false)
+  const [scheduleAction, setScheduleAction] = useState('start')
+  const [scheduleTime, setScheduleTime] = useState('')
+  const [scheduleRecurring, setScheduleRecurring] = useState(false)
+  const [scheduleCron, setScheduleCron] = useState('0 0 * * *')
+  const [schedules, setSchedules] = useState<any[]>([])
+
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [settingsName, setSettingsName] = useState('')
+  const [settingsDesc, setSettingsDesc] = useState('')
+  const [settingsCpu, setSettingsCpu] = useState(100)
+  const [settingsMemory, setSettingsMemory] = useState(1024)
+  const [settingsDisk, setSettingsDisk] = useState(5120)
+  const [settingsImage, setSettingsImage] = useState('')
+  const [settingsStartup, setSettingsStartup] = useState('')
+  const [settingsSaving, setSettingsSaving] = useState(false)
+
+  const [showShareDialog, setShowShareDialog] = useState(false)
+  const [members, setMembers] = useState<any[]>([])
+  const [shareUsername, setShareUsername] = useState('')
+  const [sharePerms, setSharePerms] = useState<string[]>(['console', 'power', 'files', 'schedules', 'logs'])
+
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => (typeof window !== 'undefined' && localStorage.getItem('wings_theme') === 'light') ? 'light' : 'dark')
+
+  const [showNetworkDialog, setShowNetworkDialog] = useState(false)
+  const [networkName, setNetworkName] = useState('')
+  const [networkDriver, setNetworkDriver] = useState('bridge')
+
+  const [serverGroups, setServerGroups] = useState<any[]>([])
+  const [showGroupDialog, setShowGroupDialog] = useState(false)
+  const [groupName, setGroupName] = useState('')
+  const [groupColor, setGroupColor] = useState('#38bdf8')
+  const [groupDescription, setGroupDescription] = useState('')
+  const [editingGroup, setEditingGroup] = useState<number | null>(null)
+
+  // Cloudflare DNS
+  const [cloudflareRecords, setCloudflareRecords] = useState<any[]>([])
+  const [showCloudflareDialog, setShowCloudflareDialog] = useState(false)
+  const [cfRecordType, setCfRecordType] = useState('A')
+  const [cfRecordName, setCfRecordName] = useState('')
+  const [cfRecordContent, setCfRecordContent] = useState('')
+  const [cfRecordTTL, setCfRecordTTL] = useState(300)
+  const [cfRecordProxied, setCfRecordProxied] = useState(false)
+  const [cfLoading, setCfLoading] = useState(false)
+
+  // Playit.gg Tunnels
+  const [playitTunnels, setPlayitTunnels] = useState<any[]>([])
+  const [showPlayitDialog, setShowPlayitDialog] = useState(false)
+  const [playitTunnelName, setPlayitTunnelName] = useState('')
+  const [playitTunnelPort, setPlayitTunnelPort] = useState(25565)
+  const [playitTunnelProtocol, setPlayitTunnelProtocol] = useState('tcp')
+  const [playitLoading, setPlayitLoading] = useState(false)
+
+  // Bug Report
+  const [showBugReport, setShowBugReport] = useState(false)
+  const [bugReportTitle, setBugReportTitle] = useState('')
+  const [bugReportDesc, setBugReportDesc] = useState('')
+  const [bugReportSeverity, setBugReportSeverity] = useState('medium')
+  const [bugReportLoading, setBugReportLoading] = useState(false)
+  const [bugReports, setBugReports] = useState<any[]>([])
+  const [showBugList, setShowBugList] = useState(false)
+
   const authHeaders = useCallback((): Record<string, string> => token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : {}, [token])
 
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
@@ -173,6 +256,11 @@ export default function Dashboard() {
     const saved = localStorage.getItem('panel_token')
     if (saved) { setToken(saved); verifyToken(saved) }
   }, [])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('wings_theme', theme)
+  }, [theme])
 
   useEffect(() => {
     if (!user) return
@@ -224,6 +312,11 @@ export default function Dashboard() {
       try { const sysRes = await apiFetch('/api/system/status'); if (sysRes.ok) setSystemStatus(await sysRes.json()) } catch {}
       try { const sumRes = await apiFetch('/api/system/nodes-summary'); if (sumRes.ok) setNodeSummaries(await sumRes.json()) } catch {}
       try { const netRes = await apiFetch('/api/system/docker-networks'); if (netRes.ok) setDockerNetworks(await netRes.json()) } catch {}
+      try { const grpRes = await apiFetch('/api/server-groups'); if (grpRes.ok) setServerGroups(await grpRes.json()) } catch {}
+      if (activeTab === 'system') {
+        try { const cfRes = await apiFetch('/api/cloudflare/dns/list'); if (cfRes.ok) { const d = await cfRes.json(); setCloudflareRecords(d.records || []) } } catch {}
+        try { const ptRes = await apiFetch('/api/playit/tunnel/list'); if (ptRes.ok) { const d = await ptRes.json(); setPlayitTunnels(d.tunnels || []) } } catch {}
+      }
     } catch (e) { console.error(e) }
   }
 
@@ -236,9 +329,89 @@ export default function Dashboard() {
   }, [selectedServer])
 
   const cleanupConsole = () => {
+    if (wsRef.current) { try { wsRef.current.close() } catch {} wsRef.current = null }
+    if (terminalRef.current) { try { terminalRef.current.dispose() } catch {} terminalRef.current = null }
+    fitAddonRef.current = null
     setConsoleUrl('')
     setConsoleError('')
+    setConsoleConnected(false)
   }
+
+  const initTerminal = async () => {
+    if (terminalRef.current || !terminalContainerRef.current) return
+    if (typeof window === 'undefined') return
+    const { Terminal } = await import('xterm')
+    const { FitAddon } = await import('@xterm/addon-fit')
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: 'var(--font-mono), monospace',
+      theme: { background: '#0d1117', foreground: '#e6edf3' },
+      convertEol: true,
+      scrollback: 2000,
+    })
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    term.open(terminalContainerRef.current)
+    fit.fit()
+    terminalRef.current = term
+    fitAddonRef.current = fit
+    term.onData((data) => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(data)
+      }
+    })
+  }
+
+  const startConsole = async (serverId: number) => {
+    setConsoleLoading(true)
+    setConsoleError('')
+    await initTerminal()
+    const term = terminalRef.current
+    if (!term) { setConsoleError('Terminal failed to initialize'); setConsoleLoading(false); return }
+    try {
+      const base = API_BASE.replace(/^https/, 'wss').replace(/^http/, 'ws')
+      const ws = new WebSocket(`${base}/ws/servers/${serverId}/console?token=${encodeURIComponent(token || '')}`)
+      wsRef.current = ws
+      ws.binaryType = 'arraybuffer'
+      ws.onopen = () => {
+        setConsoleConnected(true)
+        setConsoleLoading(false)
+        term.writeln('Connected to container shell. Type commands below.')
+      }
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {
+          term.write(ev.data)
+        } else {
+          term.write(new Uint8Array(ev.data as ArrayBuffer))
+        }
+      }
+      ws.onclose = () => {
+        setConsoleConnected(false)
+        setConsoleLoading(false)
+        if (wsRef.current === ws) wsRef.current = null
+      }
+      ws.onerror = () => {
+        setConsoleError('WebSocket connection failed. Is the server running?')
+        setConsoleConnected(false)
+        setConsoleLoading(false)
+      }
+    } catch {
+      setConsoleError('Cannot reach panel websocket')
+      setConsoleLoading(false)
+    }
+  }
+
+  const stopConsole = async () => {
+    if (wsRef.current) { try { wsRef.current.close() } catch {} wsRef.current = null }
+    if (terminalRef.current) { try { terminalRef.current.dispose() } catch {} terminalRef.current = null }
+    terminalRef.current = null
+    fitAddonRef.current = null
+    setConsoleUrl('')
+    setConsoleConnected(false)
+  }
+
+  const disconnectConsole = () => { cleanupConsole() }
 
   useEffect(() => {
     if (!selectedServer) return
@@ -246,39 +419,202 @@ export default function Dashboard() {
     return () => clearInterval(id)
   }, [selectedServer])
 
-  const startConsole = async (serverId: number) => {
-    setConsoleLoading(true)
-    setConsoleError('')
-    try {
-      const startRes = await apiFetch(`/api/servers/${serverId}/console/start`, { method: 'POST' })
-      if (!startRes.ok) {
-        const err = await startRes.json()
-        setConsoleError(err.detail || 'Failed to start console')
-        setConsoleLoading(false)
-        return
-      }
-      const urlRes = await apiFetch(`/api/servers/${serverId}/console/url`)
-      if (urlRes.ok) {
-        const data = await urlRes.json()
-        setConsoleUrl(data.url)
-      } else {
-        setConsoleError('Failed to get console URL')
-      }
-    } catch {
-      setConsoleError('Cannot reach daemon')
-    }
-    setConsoleLoading(false)
-  }
-
-  const stopConsole = async (serverId: number) => {
-    try { await apiFetch(`/api/servers/${serverId}/console/stop`, { method: 'DELETE' }) } catch {}
-    setConsoleUrl('')
-  }
-
-  const disconnectConsole = () => { cleanupConsole() }
-
   const fetchStats = async (serverId: number) => {
     try { const res = await apiFetch(`/api/servers/${serverId}/stats`); if (res.ok) { const d = await res.json(); setStats({ cpu: d.cpu_percentage || 0, memory: d.memory_mb || 0, disk: d.disk_mb || 0, status: d.status || 'offline' }) } } catch {}
+  }
+
+  const fetchLogs = async (serverId: number) => {
+    setLogsLoading(true)
+    try { const res = await apiFetch(`/api/servers/${serverId}/logs?tail=${logsTail}`); if (res.ok) { const d = await res.json(); setLogsContent(d.logs || '') } } catch {}
+    setLogsLoading(false)
+  }
+
+  const cloneServer = async (srv: Server) => {
+    if (!cloneName.trim()) { showPopup('error', 'Missing Name', 'Enter a name for the cloned server'); return }
+    setCloning(true)
+    try {
+      const res = await apiFetch(`/api/servers/${srv.id}/clone`, { method: 'POST', body: JSON.stringify({ name: cloneName }) })
+      if (res.ok) { showPopup('success', 'Cloned', `Server cloned as "${cloneName}".`); setShowCloneDialog(false); setCloneName(''); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Clone Failed', e.detail || 'Failed to clone server') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setCloning(false)
+  }
+
+  const fetchSchedules = async (serverId: number) => {
+    try { const res = await apiFetch(`/api/servers/${serverId}/schedules`); if (res.ok) setSchedules(await res.json()) } catch {}
+  }
+
+  const createSchedule = async () => {
+    if (!selectedServer) return
+    if (!scheduleTime && !scheduleCron) { showPopup('error', 'Missing Info', 'Select a time (or a cron pattern for recurring schedules)'); return }
+    try {
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/schedules`, { method: 'POST', body: JSON.stringify({ action: scheduleAction, scheduled_time: scheduleTime ? new Date(scheduleTime).toISOString() : scheduleTime, recurring: scheduleRecurring, recurring_pattern: scheduleRecurring ? scheduleCron : null }) })
+      if (res.ok) { showPopup('success', 'Scheduled', `Power action scheduled.`); setShowScheduleDialog(false); setScheduleTime(''); setScheduleRecurring(false); setScheduleCron('0 0 * * *'); fetchSchedules(selectedServer.id); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create schedule') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const deleteSchedule = async (scheduleId: number) => {
+    showPopup('confirm', 'Delete Schedule', 'Delete this schedule?', async () => {
+      try { const res = await apiFetch(`/api/servers/${selectedServer?.id}/schedules/${scheduleId}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', 'Schedule removed.'); fetchSchedules(selectedServer!.id); fetchAll() } } catch {}
+    })
+  }
+
+  const toggleSchedule = async (scheduleId: number, isActive: boolean) => {
+    try {
+      const res = await apiFetch(`/api/servers/${selectedServer?.id}/schedules/${scheduleId}/toggle`, { method: 'POST' })
+      if (res.ok) { showPopup('success', 'Updated', isActive ? 'Schedule paused.' : 'Schedule activated.'); fetchSchedules(selectedServer!.id) }
+    } catch {}
+  }
+
+  const createNetwork = async () => {
+    if (!networkName.trim()) { showPopup('error', 'Missing Name', 'Enter a network name'); return }
+    try {
+      const res = await apiFetch('/api/system/networks', { method: 'POST', body: JSON.stringify({ name: networkName, driver: networkDriver }) })
+      if (res.ok) { showPopup('success', 'Created', `Network "${networkName}" created.`); setShowNetworkDialog(false); setNetworkName(''); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create network') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const deleteNetwork = async (name: string) => {
+    showPopup('confirm', 'Delete Network', `Delete network "${name}"?`, async () => {
+      try { const res = await apiFetch(`/api/system/networks/${encodeURIComponent(name)}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', `Network "${name}" removed.`); fetchAll() } } catch {}
+    })
+  }
+
+  const fetchServerGroups = async () => {
+    try { const res = await apiFetch('/api/server-groups'); if (res.ok) setServerGroups(await res.json()) } catch {}
+  }
+
+  const createServerGroup = async () => {
+    if (!groupName.trim()) { showPopup('error', 'Missing Name', 'Enter a group name'); return }
+    try {
+      const res = await apiFetch('/api/server-groups', { method: 'POST', body: JSON.stringify({ name: groupName, description: groupDescription, color: groupColor }) })
+      if (res.ok) { showPopup('success', 'Created', `Group "${groupName}" created.`); setShowGroupDialog(false); setGroupName(''); setGroupDescription(''); fetchServerGroups(); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create group') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const deleteServerGroup = async (groupId: number, name: string) => {
+    showPopup('confirm', 'Delete Group', `Delete group "${name}"?`, async () => {
+      try { const res = await apiFetch(`/api/server-groups/${groupId}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', `Group "${name}" removed.`); fetchServerGroups(); fetchAll() } } catch {}
+    })
+  }
+
+  const assignServerToGroup = async (serverId: number, groupId: number | null) => {
+    try {
+      const res = await apiFetch(`/api/servers/${serverId}`, { method: 'PATCH', body: JSON.stringify({ group_id: groupId }) })
+      if (res.ok) { showPopup('success', 'Updated', 'Server group updated.'); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to update group') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const openSettingsDialog = (srv: Server) => {
+    setSettingsName(srv.name)
+    setSettingsDesc(srv.description || '')
+    setSettingsCpu(srv.cpu_limit)
+    setSettingsMemory(srv.memory_limit)
+    setSettingsDisk(srv.disk_limit)
+    setSettingsImage(srv.docker_image)
+    setSettingsStartup(srv.startup_command || '')
+    setShowSettingsDialog(true)
+  }
+
+  const saveServerSettings = async () => {
+    if (!selectedServer) return
+    setSettingsSaving(true)
+    try {
+      const body: any = {
+        name: settingsName,
+        description: settingsDesc,
+        cpu_limit: settingsCpu,
+        memory_limit: settingsMemory,
+        disk_limit: settingsDisk,
+        docker_image: settingsImage,
+        startup_command: settingsStartup,
+      }
+      const res = await apiFetch(`/api/servers/${selectedServer.id}`, { method: 'PATCH', body: JSON.stringify(body) })
+      if (res.ok) {
+        showPopup('success', 'Saved', 'Server settings updated.')
+        setShowSettingsDialog(false)
+        fetchAll()
+        setSelectedServer({ ...selectedServer, ...body })
+      } else { const e = await res.json(); showPopup('error', 'Update Failed', e.detail || 'Failed to update settings') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setSettingsSaving(false)
+  }
+
+  const openShareDialog = async (srv: Server) => {
+    setShareUsername('')
+    setSharePerms(['console', 'power', 'files', 'schedules', 'logs'])
+    setShowShareDialog(true)
+    await fetchMembers(srv.id)
+  }
+
+  const fetchMembers = async (serverId: number) => {
+    try { const res = await apiFetch(`/api/servers/${serverId}/members`); if (res.ok) setMembers(await res.json()) } catch {}
+  }
+
+  const addMember = async () => {
+    if (!selectedServer || !shareUsername.trim()) { showPopup('error', 'Missing Info', 'Enter a username or email'); return }
+    try {
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/members`, { method: 'POST', body: JSON.stringify({ username: shareUsername.trim(), permissions: sharePerms.join(',') }) })
+      if (res.ok) { showPopup('success', 'Shared', `Server shared with ${shareUsername.trim()}.`); setShareUsername(''); fetchMembers(selectedServer.id) }
+      else { const e = await res.json(); showPopup('error', 'Share Failed', e.detail || 'Failed to share server') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const removeMember = async (member: any) => {
+    if (!selectedServer) return
+    showPopup('confirm', 'Remove Access', `Remove "${member.username}" from this server?`, async () => {
+      try { const res = await apiFetch(`/api/servers/${selectedServer!.id}/members/${member.id}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Removed', 'Access removed.'); fetchMembers(selectedServer!.id) } } catch {}
+    })
+  }
+
+  // Cloudflare DNS functions
+  const fetchCloudflareRecords = async () => {
+    setCfLoading(true)
+    try { const res = await apiFetch('/api/cloudflare/dns/list'); if (res.ok) { const data = await res.json(); setCloudflareRecords(data.records || []) } } catch {}
+    setCfLoading(false)
+  }
+
+  const createCloudflareRecord = async () => {
+    if (!cfRecordName.trim() || !cfRecordContent.trim()) { showPopup('error', 'Missing Info', 'Name and Content are required'); return }
+    setCfLoading(true)
+    try {
+      const res = await apiFetch('/api/cloudflare/dns/create', { method: 'POST', body: JSON.stringify({ type: cfRecordType, name: cfRecordName, content: cfRecordContent, ttl: cfRecordTTL, proxied: cfRecordProxied }) })
+      if (res.ok) { showPopup('success', 'Created', 'DNS record created.'); setShowCloudflareDialog(false); setCfRecordName(''); setCfRecordContent(''); fetchCloudflareRecords(); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create record') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setCfLoading(false)
+  }
+
+  const deleteCloudflareRecord = async (recordId: string) => {
+    showPopup('confirm', 'Delete Record', `Delete DNS record "${recordId}"?`, async () => {
+      try { const res = await apiFetch(`/api/cloudflare/dns/delete/${recordId}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', 'DNS record removed.'); fetchCloudflareRecords() } } catch {}
+    })
+  }
+
+  // Playit.gg functions
+  const fetchPlayitTunnels = async () => {
+    try { const res = await apiFetch('/api/playit/tunnel/list'); if (res.ok) { const data = await res.json(); setPlayitTunnels(data.tunnels || []) } } catch {}
+  }
+
+  const createPlayitTunnel = async () => {
+    if (!playitTunnelName.trim()) { showPopup('error', 'Missing Name', 'Enter a tunnel name'); return }
+    setPlayitLoading(true)
+    try {
+      const res = await apiFetch('/api/playit/tunnel/create', { method: 'POST', body: JSON.stringify({ name: playitTunnelName, port: playitTunnelPort, protocol: playitTunnelProtocol }) })
+      if (res.ok) { showPopup('success', 'Created', 'Playit.gg tunnel created.'); setShowPlayitDialog(false); setPlayitTunnelName(''); fetchPlayitTunnels(); fetchAll() }
+      else { const e = await res.json(); showPopup('error', 'Error', e.detail || 'Failed to create tunnel') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setPlayitLoading(false)
+  }
+
+  const deletePlayitTunnel = async (tunnelId: string) => {
+    showPopup('confirm', 'Delete Tunnel', `Delete Playit.gg tunnel "${tunnelId}"?`, async () => {
+      try { const res = await apiFetch(`/api/playit/tunnel/delete/${tunnelId}`, { method: 'DELETE' }); if (res.ok) { showPopup('success', 'Deleted', 'Tunnel removed.'); fetchPlayitTunnels() } } catch {}
+    })
   }
 
   const fetchFiles = async (serverId: number, path: string) => {
@@ -320,6 +656,50 @@ export default function Dashboard() {
     showPopup('confirm', 'Delete File', `Delete "${file.name}"?`, async () => {
       try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/delete?path=${encodeURIComponent(fp)}`, { method: 'DELETE' }); if (res.ok) refreshFiles() } catch {}
     })
+  }
+
+  const renameFile = async () => {
+    if (!selectedServer || !renameTarget || !renameValue.trim()) return
+    const oldPath = currentPath ? `${currentPath}/${renameTarget.name}` : renameTarget.name
+    const newPath = currentPath ? `${currentPath}/${renameValue.trim()}` : renameValue.trim()
+    if (oldPath === newPath) { setRenameTarget(null); setRenameValue(''); return }
+    try {
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/files/rename`, { method: 'POST', body: JSON.stringify({ old_path: oldPath, new_path: newPath }) })
+      if (res.ok) { setRenameTarget(null); setRenameValue(''); showPopup('success', 'Renamed', 'File renamed successfully.'); refreshFiles() }
+      else { const e = await res.json(); showPopup('error', 'Rename Failed', e.detail || 'Failed to rename') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const downloadFile = async (file: FileEntry) => {
+    if (!selectedServer || file.is_directory) return
+    const fp = currentPath ? `${currentPath}/${file.name}` : file.name
+    try {
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/files/read?path=${encodeURIComponent(fp)}`)
+      if (res.ok) {
+        const d = await res.json()
+        const blob = new Blob([d.content || ''], { type: 'application/octet-stream' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = file.name
+        document.body.appendChild(a); a.click(); a.remove()
+        URL.revokeObjectURL(url)
+      } else { const e = await res.json(); showPopup('error', 'Download Failed', e.detail || 'Failed to read file') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+  }
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!selectedServer || !e.target.files || e.target.files.length === 0) return
+    const file = e.target.files[0]
+    const fp = currentPath ? `${currentPath}/${file.name}` : file.name
+    setUploading(true)
+    try {
+      const content = await file.text()
+      const res = await apiFetch(`/api/servers/${selectedServer.id}/files/write`, { method: 'POST', body: JSON.stringify({ path: fp, content }) })
+      if (res.ok) { showPopup('success', 'Uploaded', `"${file.name}" uploaded successfully.`); refreshFiles() }
+      else { const err = await res.json(); showPopup('error', 'Upload Failed', err.detail || 'Failed to upload file') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setUploading(false)
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const navigateUp = () => {
@@ -372,14 +752,6 @@ export default function Dashboard() {
     showPopup('confirm', 'Delete Server', `Delete "${srv.name}"? This cannot be undone.`, async () => {
       try { const res = await apiFetch(`/api/servers/${srv.id}`, { method: 'DELETE' }); if (res.ok) { setSelectedServer(null); fetchAll() } } catch {}
     })
-  }
-
-  const deployDemoServer = async () => {
-    try {
-      const res = await apiFetch('/api/servers/demo', { method: 'POST' })
-      if (res.ok) { showPopup('success', 'Demo Deploying', 'Your demo server is being created. It will appear here shortly.'); fetchAll() }
-      else { const e = await res.json(); showPopup('error', 'Demo Failed', e.detail || 'Failed to create demo server') }
-    } catch { showPopup('error', 'Connection Error', 'Cannot reach panel API') }
   }
 
   const fetchActivity = async (offset = 0) => {
@@ -556,13 +928,14 @@ export default function Dashboard() {
             <span className="topbar-tag">× Pterodactyl Panel &copy; 2026</span>
           </div>
           <div className="topbar-right">
+            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="topbar-btn" title="Toggle Theme">{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}<span>{theme === 'dark' ? 'Light' : 'Dark'}</span></button>
             <div className="user-chip">
               <Shield size={14} style={{ color: 'var(--color-primary)' }} />
               <span>{user.username}</span>
               {user.root_admin && <span className="admin-badge">ADMIN</span>}
             </div>
             <button onClick={logout} className="topbar-btn" title="Sign Out"><LogOut size={14} /><span>Sign Out</span></button>
-            <button onClick={() => window.open('mailto:wingspanelsupport@gmail.com?subject=Bug Report&body=Describe the bug here...', '_blank')} className="topbar-btn" title="Report Bug"><Bug size={14} /><span>Report</span></button>
+            <button onClick={() => { setBugReportTitle(''); setBugReportDesc(''); setBugReportSeverity('medium'); setShowBugReport(true) }} className="topbar-btn" title="Report Bug"><Bug size={14} /><span>Report</span></button>
             <button onClick={() => window.open('https://ko-fi.com/wingspanel', '_blank')} className="topbar-btn" title="Support on Ko-Fi"><Coffee size={14} /><span>Donate</span></button>
           </div>
         </header>
@@ -597,35 +970,82 @@ export default function Dashboard() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                           <input type="checkbox" checked={selectedServerIds.includes(s.id)} onChange={() => toggleServerSelect(s.id)} style={{ accentColor: 'var(--color-primary)', width: '18px', height: '18px', cursor: 'pointer' }} />
                           <div style={{ padding: '8px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)', borderRadius: '8px' }}><ServerIcon size={20} /></div>
-                          <div><h3 style={{ fontSize: '1rem', fontWeight: 600 }}>{s.name}</h3><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.uuid.substring(0, 8)}...</p></div>
+                          <div><h3 style={{ fontSize: '1rem', fontWeight: 600 }}>{s.name} {s.owner_id !== user.id && !user.root_admin && <span style={{ fontSize: '0.65rem', color: 'var(--color-secondary)', border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.1)', padding: '1px 6px', borderRadius: '4px', verticalAlign: 'middle' }}>SHARED</span>}</h3><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.uuid.substring(0, 8)}...</p></div>
                         </div>
                         <span className={`status-pill ${s.status}`}><span className="status-glow"></span>{s.status}</span>
                       </div>
                       <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '20px', minHeight: '40px' }}>{s.description || 'No description'}</p>
-                      <div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginBottom: '20px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Cpu size={14} /><span>{s.cpu_limit}%</span></div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><HardDrive size={14} /><span>{s.memory_limit} MB</span></div>
-                      </div>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button onClick={() => setSelectedServer(s)} className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}>Manage</button>
-                        {user.root_admin && <button onClick={() => deleteServer(s)} className="btn btn-danger" style={{ padding: '8px 12px' }}><Trash2 size={14} /></button>}
-                      </div>
+<div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginBottom: '20px' }}>
+                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Cpu size={14} /><span>{s.cpu_limit}%</span></div>
+                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><HardDrive size={14} /><span>{s.memory_limit} MB</span></div>
+                         {s.group_id && (
+                           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                             <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: serverGroups.find(g => g.id === s.group_id)?.color || '#38bdf8' }}></div>
+                             <span>{serverGroups.find(g => g.id === s.group_id)?.name || 'Group'}</span>
+                           </div>
+                         )}
+                       </div>
+                       <div style={{ display: 'flex', gap: '8px' }}>
+                         <button onClick={() => setSelectedServer(s)} className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}>Manage</button>
+                         {user.root_admin && (
+                           <select className="form-control" value={s.group_id || ''} onChange={e => assignServerToGroup(s.id, e.target.value ? Number(e.target.value) : null)} style={{ width: 'auto', padding: '6px 8px', fontSize: '0.8rem' }}>
+                             <option value="">No Group</option>
+                             {serverGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                           </select>
+                         )}
+                         {user.root_admin && <button onClick={() => deleteServer(s)} className="btn btn-danger" style={{ padding: '8px 12px' }}><Trash2 size={14} /></button>}
+                       </div>
                     </div>
                   ))}
                   {servers.length === 0 && (
                     <div className="card" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
                       <Layers size={48} style={{ color: 'var(--color-primary)', margin: '0 auto 16px', display: 'block', opacity: 0.7 }} />
                       <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>No servers yet</p>
-                      <p style={{ fontSize: '0.875rem', marginBottom: '24px' }}>Deploy a ready-made demo server to explore the panel, or build your own.</p>
+                      <p style={{ fontSize: '0.875rem', marginBottom: '24px' }}>Deploy your first game server from the Deploy tab.</p>
                       <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                        <button onClick={deployDemoServer} className="btn btn-primary"><Sparkles size={16} /><span>Deploy Demo Server</span></button>
-                        <button onClick={() => setActiveTab('create-server')} className="btn btn-outline"><PlusCircle size={16} /><span>Deploy Custom</span></button>
+                        <button onClick={() => setActiveTab('create-server')} className="btn btn-primary"><PlusCircle size={16} /><span>Deploy Server</span></button>
                       </div>
                     </div>
-                  )}
+                  )}</div>
+                  <div className="card" style={{ marginTop: '24px', marginBottom: '24px' }}>
+                    <div className="header-wrapper">
+                      <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Cloudflare DNS</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Manage DNS records for game server domains</p></div>
+                      <button onClick={() => { setCfRecordName(''); setCfRecordContent(''); setCfRecordType('A'); setCfRecordTTL(300); setCfRecordProxied(false); setShowCloudflareDialog(true) }} className="btn btn-primary"><Plus size={14} /><span>Add Record</span></button>
+                    </div>
+                    {cfLoading ? (
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading records...</p>
+                    ) : cloudflareRecords.length > 0 ? (
+                      <div style={{ display: 'grid', gap: '8px' }}>
+                        {cloudflareRecords.map(rec => (
+                          <div key={rec.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <span style={{ fontWeight: 600, fontSize: '0.85rem', padding: '2px 8px', borderRadius: '4px', background: 'rgba(56,189,248,0.1)', color: 'var(--color-primary)' }}>{rec.type}</span>
+                              <div><p style={{ fontWeight: 600, fontSize: '0.85rem' }}>{rec.name}</p><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{rec.content} {rec.proxied ? '(proxied)' : ''}</p></div>
+                            </div>
+                            <button onClick={() => deleteCloudflareRecord(rec.id)} className="btn btn-danger" style={{ padding: '4px 10px', fontSize: '0.8rem' }}>Delete</button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No DNS records found. Configure Cloudflare API token and zone ID in the daemon env vars.</p>)}
+                  </div>
+                  <div className="card" style={{ marginTop: '24px', marginBottom: '24px' }}>
+                    <div className="header-wrapper">
+                      <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Playit.gg Tunnels</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Manage Playit.gg tunnels for public server access</p></div>
+                      <button onClick={() => { setPlayitTunnelName(''); setPlayitTunnelPort(25565); setPlayitTunnelProtocol('tcp'); setShowPlayitDialog(true) }} className="btn btn-primary"><Plus size={14} /><span>Create Tunnel</span></button>
+                    </div>
+                    {playitTunnels.length > 0 ? (
+                      <div style={{ display: 'grid', gap: '8px' }}>
+                        {playitTunnels.map(t => (
+                          <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                            <div><p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{t.name}</p><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{t.url} — {t.protocol} :{t.port}</p></div>
+                            <button onClick={() => deletePlayitTunnel(t.id)} className="btn btn-danger" style={{ padding: '4px 10px', fontSize: '0.8rem' }}>Delete</button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No tunnels configured. Set PLAYIT_CLAIM_TOKEN in the daemon env vars.</p>)}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
             {activeTab === 'nodes' && (
               <div>
@@ -745,15 +1165,50 @@ export default function Dashboard() {
                     </div>
                   ) : (<p style={{ color: 'var(--text-muted)' }}>No nodes registered</p>)}
                 </div>
-                <div className="card">
-                  <h3 style={{ marginBottom: '12px' }}>Quick Info</h3>
-                  <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    <div>Active Nodes: <span style={{ color: 'var(--text-primary)' }}>{systemStatus?.active_nodes || 0}</span></div>
-                    <div>Allocations Used: <span style={{ color: 'var(--text-primary)' }}>{systemStatus?.used_allocations || 0}</span></div>
-                  </div>
-                </div>
-              </div>
-            )}
+<div className="card">
+                   <h3 style={{ marginBottom: '12px' }}>Quick Info</h3>
+                   <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                     <div>Active Nodes: <span style={{ color: 'var(--text-primary)' }}>{systemStatus?.active_nodes || 0}</span></div>
+                     <div>Allocations Used: <span style={{ color: 'var(--text-primary)' }}>{systemStatus?.used_allocations || 0}</span></div>
+                   </div>
+                 </div>
+                 <div className="card" style={{ marginTop: '24px', marginBottom: '24px' }}>
+                   <div className="header-wrapper">
+                     <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Docker Networks</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Manage Docker networks for server containers</p></div>
+                     <button onClick={() => { setNetworkName(''); setNetworkDriver('bridge'); setShowNetworkDialog(true) }} className="btn btn-primary"><Plus size={14} /><span>Create Network</span></button>
+                   </div>
+                   {dockerNetworks.length > 0 ? (
+                     <div style={{ display: 'grid', gap: '8px' }}>
+                       {dockerNetworks.map(n => (
+                         <div key={n.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                           <div><p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{n.name}</p><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{n.driver} — {n.id}</p></div>
+                           <button onClick={() => deleteNetwork(n.name)} className="btn btn-danger" style={{ padding: '4px 10px', fontSize: '0.8rem' }}>Delete</button>
+                         </div>
+                       ))}
+                     </div>
+                   ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No networks found</p>)}
+                 </div>
+                 <div className="card">
+                   <div className="header-wrapper">
+                     <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Server Groups</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Organize servers into groups for easier management</p></div>
+                     <button onClick={() => { setGroupName(''); setGroupDescription(''); setGroupColor('#38bdf8'); setEditingGroup(null); setShowGroupDialog(true) }} className="btn btn-primary"><Plus size={14} /><span>Create Group</span></button>
+                   </div>
+                   {serverGroups.length > 0 ? (
+                     <div style={{ display: 'grid', gap: '8px' }}>
+                       {serverGroups.map(g => (
+                         <div key={g.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                             <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: g.color || '#38bdf8' }}></div>
+                             <div><p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{g.name}</p><p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{g.description || 'No description'}</p></div>
+                           </div>
+                           <button onClick={() => deleteServerGroup(g.id, g.name)} className="btn btn-danger" style={{ padding: '4px 10px', fontSize: '0.8rem' }}>Delete</button>
+                         </div>
+                       ))}
+                     </div>
+                   ) : (<p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No groups created yet</p>)}
+                 </div>
+               </div>
+             )}
 
             {activeTab === 'activity' && (
               <div>
@@ -1068,6 +1523,12 @@ export default function Dashboard() {
                 <button onClick={() => reinstallServer(selectedServer)} className="btn btn-outline" style={{ color: 'var(--color-warning)', borderColor: 'rgba(245,158,11,0.2)' }}><RotateCcw size={16} /><span>Reinstall</span></button>
                 {user.root_admin && <button onClick={() => transferServer(selectedServer)} className="btn btn-outline"><ArrowRight size={16} /><span>Transfer</span></button>}
                 {user.root_admin && <button onClick={() => suspendServer(selectedServer, selectedServer.status !== 'suspended')} className="btn btn-outline" style={{ color: 'var(--color-danger)', borderColor: 'rgba(239,68,68,0.2)' }}><PauseCircle size={16} /><span>{selectedServer.status === 'suspended' ? 'Unsuspend' : 'Suspend'}</span></button>}
+                <button onClick={() => { setCloneName(`${selectedServer.name}-clone`); setShowCloneDialog(true) }} className="btn btn-outline" style={{ color: 'var(--color-secondary)', borderColor: 'rgba(168,85,247,0.2)' }}><Layers size={16} /><span>Clone</span></button>
+              </div>
+              <div style={{ height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => openSettingsDialog(selectedServer)} className="btn btn-outline"><Settings2 size={16} /><span>Settings</span></button>
+                {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => openShareDialog(selectedServer)} className="btn btn-outline"><Share2 size={16} /><span>Share</span></button>}
               </div>
               <div style={{ height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
               <div style={{ display: 'flex', gap: '24px' }}>
@@ -1076,9 +1537,254 @@ export default function Dashboard() {
                 <div><span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>DISK</span><p style={{ fontWeight: 600 }}>{stats.disk} / {selectedServer.disk_limit} MB</p></div>
               </div>
             </div>
+            {showCloneDialog && (
+              <div className="popup-overlay" onClick={() => setShowCloneDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Clone Server</h3>
+                  <p className="popup-message">Enter a name for the cloned server.</p>
+                  <div className="form-group">
+                    <input className="form-control" value={cloneName} onChange={e => setCloneName(e.target.value)} placeholder="Cloned server name" autoFocus />
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowCloneDialog(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={() => cloneServer(selectedServer!)} disabled={cloning}>{cloning ? 'Cloning...' : 'Clone'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showScheduleDialog && selectedServer && (
+              <div className="popup-overlay" onClick={() => setShowScheduleDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Schedule Power Action</h3>
+                  <div className="form-group">
+                    <label className="form-label">Action</label>
+                    <select className="form-control" value={scheduleAction} onChange={e => setScheduleAction(e.target.value)}>
+                      <option value="start">Start</option>
+                      <option value="stop">Stop</option>
+                      <option value="kill">Kill</option>
+                      <option value="restart">Restart</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Scheduled Time</label>
+                    <input className="form-control" type="datetime-local" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.875rem' }}>
+                      <input type="checkbox" checked={scheduleRecurring} onChange={e => setScheduleRecurring(e.target.checked)} style={{ accentColor: 'var(--color-primary)' }} /> Recurring (cron pattern)
+                    </label>
+                  </div>
+                  {scheduleRecurring && (
+                    <div className="form-group">
+                      <label className="form-label">Cron Pattern <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(minute hour day month weekday)</span></label>
+                      <input className="form-control" value={scheduleCron} onChange={e => setScheduleCron(e.target.value)} placeholder="e.g. 0 4 * * *" style={{ fontFamily: 'var(--font-mono)' }} />
+                      <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '6px' }}>Examples: <code style={{ color: 'var(--color-primary)' }}>*/5 * * * *</code> every 5 min, <code style={{ color: 'var(--color-primary)' }}>0 4 * * *</code> daily 04:00, <code style={{ color: 'var(--color-primary)' }}>0 2 * * 1</code> Mondays 02:00</p>
+                    </div>
+                  )}
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowScheduleDialog(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={createSchedule}>Schedule</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showSettingsDialog && selectedServer && (
+              <div className="popup-overlay" onClick={() => setShowSettingsDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Server Settings</h3>
+                  <p className="popup-message">Update server configuration. Image/startup changes apply on next reinstall.</p>
+                  <div className="form-group">
+                    <label className="form-label">Name</label>
+                    <input className="form-control" value={settingsName} onChange={e => setSettingsName(e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Description</label>
+                    <textarea className="form-control" rows={2} value={settingsDesc} onChange={e => setSettingsDesc(e.target.value)} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                    <div className="form-group">
+                      <label className="form-label">CPU %</label>
+                      <input className="form-control" type="number" value={settingsCpu} onChange={e => setSettingsCpu(Number(e.target.value))} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Memory (MB)</label>
+                      <input className="form-control" type="number" value={settingsMemory} onChange={e => setSettingsMemory(Number(e.target.value))} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Disk (MB)</label>
+                      <input className="form-control" type="number" value={settingsDisk} onChange={e => setSettingsDisk(Number(e.target.value))} />
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Docker Image</label>
+                    <input className="form-control" value={settingsImage} onChange={e => setSettingsImage(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Startup Command</label>
+                    <textarea className="form-control" rows={2} value={settingsStartup} onChange={e => setSettingsStartup(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowSettingsDialog(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={saveServerSettings} disabled={settingsSaving}>{settingsSaving ? 'Saving...' : 'Save'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showShareDialog && selectedServer && (
+              <div className="popup-overlay" onClick={() => setShowShareDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Share Server</h3>
+                  <p className="popup-message">Grant other panel users access to "{selectedServer.name}".</p>
+                  <div className="form-group">
+                    <label className="form-label">Username or Email</label>
+                    <input className="form-control" value={shareUsername} onChange={e => setShareUsername(e.target.value)} placeholder="e.g. friend@example.com" onKeyDown={e => { if (e.key === 'Enter') addMember() }} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Permissions</label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', fontSize: '0.8rem' }}>
+                      {['console', 'power', 'files', 'schedules', 'logs'].map(p => (
+                        <label key={p} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={sharePerms.includes(p)} onChange={() => setSharePerms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])} style={{ accentColor: 'var(--color-primary)' }} /> {p}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+                    <button className="btn btn-primary" onClick={addMember} style={{ padding: '6px 14px' }}><Plus size={14} /> Add Member</button>
+                  </div>
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {members.length === 0 && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>No shared members yet.</p>}
+                    {members.map(m => (
+                      <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                        <div>
+                          <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>{m.username}</span>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{m.permissions.split(',').join(', ')}</div>
+                        </div>
+                        <button onClick={() => removeMember(m)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowShareDialog(false)}>Close</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showNetworkDialog && (
+              <div className="popup-overlay" onClick={() => setShowNetworkDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Create Docker Network</h3>
+                  <div className="form-group">
+                    <label className="form-label">Network Name</label>
+                    <input className="form-control" value={networkName} onChange={e => setNetworkName(e.target.value)} placeholder="e.g. my-network" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Driver</label>
+                    <select className="form-control" value={networkDriver} onChange={e => setNetworkDriver(e.target.value)}>
+                      <option value="bridge">bridge</option>
+                      <option value="overlay">overlay</option>
+                      <option value="host">host</option>
+                    </select>
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowNetworkDialog(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={createNetwork}>Create</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showGroupDialog && (
+              <div className="popup-overlay" onClick={() => setShowGroupDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">{editingGroup ? 'Edit Group' : 'Create Group'}</h3>
+                  <div className="form-group">
+                    <label className="form-label">Name</label>
+                    <input className="form-control" value={groupName} onChange={e => setGroupName(e.target.value)} placeholder="Group name" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Description</label>
+                    <input className="form-control" value={groupDescription} onChange={e => setGroupDescription(e.target.value)} placeholder="Optional description" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Color</label>
+                    <input className="form-control" type="color" value={groupColor} onChange={e => setGroupColor(e.target.value)} />
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowGroupDialog(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={createServerGroup}>Save</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showCloudflareDialog && (
+              <div className="popup-overlay" onClick={() => setShowCloudflareDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Add DNS Record</h3>
+                  <div className="form-group">
+                    <label className="form-label">Type</label>
+                    <select className="form-control" value={cfRecordType} onChange={e => setCfRecordType(e.target.value)}>
+                      <option value="A">A</option>
+                      <option value="AAAA">AAAA</option>
+                      <option value="CNAME">CNAME</option>
+                      <option value="TXT">TXT</option>
+                      <option value="SRV">SRV</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Name (subdomain)</label>
+                    <input className="form-control" value={cfRecordName} onChange={e => setCfRecordName(e.target.value)} placeholder="e.g. mc.example.com" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Content (IP or target)</label>
+                    <input className="form-control" value={cfRecordContent} onChange={e => setCfRecordContent(e.target.value)} placeholder="e.g. 192.168.1.100" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">TTL (seconds)</label>
+                    <input className="form-control" type="number" value={cfRecordTTL} onChange={e => setCfRecordTTL(Number(e.target.value))} min={60} max={86400} />
+                  </div>
+                  <div className="form-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.875rem' }}>
+                      <input type="checkbox" checked={cfRecordProxied} onChange={e => setCfRecordProxied(e.target.checked)} style={{ accentColor: 'var(--color-primary)' }} /> Proxied (Cloudflare CDN)
+                    </label>
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowCloudflareDialog(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={createCloudflareRecord} disabled={cfLoading}>{cfLoading ? 'Saving...' : 'Create'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showPlayitDialog && (
+              <div className="popup-overlay" onClick={() => setShowPlayitDialog(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Create Playit.gg Tunnel</h3>
+                  <div className="form-group">
+                    <label className="form-label">Tunnel Name</label>
+                    <input className="form-control" value={playitTunnelName} onChange={e => setPlayitTunnelName(e.target.value)} placeholder="e.g. my-mc-server" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Port</label>
+                    <input className="form-control" type="number" value={playitTunnelPort} onChange={e => setPlayitTunnelPort(Number(e.target.value))} min={1} max={65535} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Protocol</label>
+                    <select className="form-control" value={playitTunnelProtocol} onChange={e => setPlayitTunnelProtocol(e.target.value)}>
+                      <option value="tcp">TCP</option>
+                      <option value="udp">UDP</option>
+                    </select>
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowPlayitDialog(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={createPlayitTunnel} disabled={playitLoading}>{playitLoading ? 'Creating...' : 'Create'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="tabs-container">
               <button onClick={() => setDetailTab('console')} className={`tab-btn ${detailTab === 'console' ? 'active' : ''}`}><TerminalIcon size={16} /> Console</button>
               <button onClick={() => setDetailTab('files')} className={`tab-btn ${detailTab === 'files' ? 'active' : ''}`}><Folder size={16} /> Files</button>
+              <button onClick={() => { setDetailTab('logs'); fetchLogs(selectedServer.id) }} className={`tab-btn ${detailTab === 'logs' ? 'active' : ''}`}><Bug size={16} /> Logs</button>
+              <button onClick={() => { setDetailTab('schedules'); fetchSchedules(selectedServer.id) }} className={`tab-btn ${detailTab === 'schedules' ? 'active' : ''}`}><Activity size={16} /> Schedules</button>
             </div>
 
             {detailTab === 'console' && (
@@ -1086,25 +1792,17 @@ export default function Dashboard() {
                 <div className="terminal-header">
                   <div className="terminal-dots"><span className="terminal-dot" style={{ backgroundColor: '#ef4444' }}></span><span className="terminal-dot" style={{ backgroundColor: '#f59e0b' }}></span><span className="terminal-dot" style={{ backgroundColor: '#10b981' }}></span></div>
                   <span>wings@{selectedServer.uuid.substring(0, 8)}</span>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    {consoleConnected && <span style={{ color: 'var(--color-success)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}><span className="status-glow"></span>Connected</span>}
+                    {consoleConnected && <button onClick={() => stopConsole()} className="btn btn-outline" style={{ padding: '4px 12px', fontSize: '0.8rem' }}><LogOut size={14} /> Disconnect</button>}
+                  </div>
                 </div>
-                {consoleUrl ? (
-                  <>
-                    <iframe src={consoleUrl} style={{ width: '100%', height: '600px', border: 'none', background: '#000' }} />
-                    <div style={{ padding: '8px 12px', borderTop: '1px solid #30363d', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Connected to {selectedServer.name}</span>
-                      <button onClick={() => stopConsole(selectedServer.id)} className="btn btn-outline" style={{ padding: '4px 12px', fontSize: '0.8rem' }}><LogOut size={14} /> Disconnect</button>
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ height: '500px', background: '#0d1117', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px', padding: '24px' }}>
-                    <Shield size={40} style={{ color: 'var(--color-primary)', marginBottom: '4px' }} />
-                    <p style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '1rem' }}>Open Server Console</p>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', maxWidth: '400px' }}>
-                      Click below to open an interactive shell session to the container via ttyd.
-                    </p>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', marginBottom: '4px' }}>
-                      Server: {selectedServer.name} ({selectedServer.uuid.substring(0, 8)})
-                    </div>
+                <div
+                  ref={terminalContainerRef}
+                  style={{ height: '520px', background: '#0d1117', padding: '10px 6px' }}
+                />
+                {!consoleConnected && (
+                  <div style={{ padding: '14px', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '10px' }}>
                     {consoleError && <p style={{ color: 'var(--color-danger)', fontSize: '0.8rem', margin: 0 }}>{consoleError}</p>}
                     <button
                       onClick={() => startConsole(selectedServer.id)}
@@ -1112,8 +1810,77 @@ export default function Dashboard() {
                       disabled={consoleLoading}
                       style={{ padding: '10px 32px', fontSize: '0.9rem', opacity: consoleLoading ? 0.5 : 1 }}
                     >
-                      {consoleLoading ? 'Starting...' : <><TerminalIcon size={16} /> Open Console</>}
+                      {consoleLoading ? 'Connecting...' : <><TerminalIcon size={16} /> Open Console</>}
                     </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {detailTab === 'logs' && (
+              <div className="terminal-window">
+                <div className="terminal-header">
+                  <div className="terminal-dots"><span className="terminal-dot" style={{ backgroundColor: '#ef4444' }}></span><span className="terminal-dot" style={{ backgroundColor: '#f59e0b' }}></span><span className="terminal-dot" style={{ backgroundColor: '#10b981' }}></span></div>
+                  <span>Container Logs — {selectedServer.name}</span>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <select className="form-control" value={logsTail} onChange={e => setLogsTail(Number(e.target.value))} style={{ width: '80px', padding: '4px 8px', fontSize: '0.8rem' }}>
+                      <option value={50}>50 lines</option>
+                      <option value={100}>100 lines</option>
+                      <option value={500}>500 lines</option>
+                      <option value={1000}>1000 lines</option>
+                    </select>
+                    <button onClick={() => fetchLogs(selectedServer.id)} className="btn btn-outline" style={{ padding: '4px 10px', fontSize: '0.8rem' }}><RefreshCw size={14} /> Refresh</button>
+                  </div>
+                </div>
+                <div className="terminal-body" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  {logsLoading ? (
+                    <span style={{ color: 'var(--text-muted)' }}>Loading logs...</span>
+                  ) : logsContent ? (
+                    logsContent.split('\n').map((line, i) => (
+                      <div key={i} style={{ color: line.includes('ERROR') || line.includes('error') || line.includes('ERR') ? 'var(--color-danger)' : line.includes('WARN') || line.includes('warn') ? 'var(--color-warning)' : 'var(--text-muted)' }}>{line}</div>
+                    ))
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)' }}>No logs available</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {detailTab === 'schedules' && (
+              <div>
+                <div className="header-wrapper">
+                  <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Power Schedules</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Schedule automatic power actions for this server</p></div>
+                  <button onClick={() => { setScheduleAction('start'); setScheduleTime(''); setScheduleRecurring(false); setScheduleCron('0 0 * * *'); setShowScheduleDialog(true) }} className="btn btn-primary"><Plus size={14} /><span>New Schedule</span></button>
+                </div>
+                {schedules.length === 0 ? (
+                  <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>No schedules configured yet.</div>
+                ) : (
+                  <div className="card" style={{ padding: 0 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                      <thead><tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Action</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Scheduled</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Recurring</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'left' }}>Active</th>
+                        <th style={{ padding: '12px 14px', textAlign: 'right' }}></th>
+                      </tr></thead>
+                      <tbody>
+                        {schedules.map(s => (
+                          <tr key={s.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '12px 14px' }}>
+                              <span style={{ padding: '2px 8px', borderRadius: '4px', background: s.action === 'start' ? 'rgba(16,185,129,0.1)' : s.action === 'stop' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)', color: s.action === 'start' ? 'var(--color-success)' : s.action === 'stop' ? 'var(--color-danger)' : 'var(--color-warning)', fontSize: '0.8rem', fontWeight: 600 }}>{s.action.toUpperCase()}</span>
+                            </td>
+                            <td style={{ padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{new Date(s.scheduled_time).toLocaleString()}</td>
+                            <td style={{ padding: '12px 14px' }}>{s.recurring ? 'Yes' : 'No'}</td>
+                            <td style={{ padding: '12px 14px' }}><span style={{ color: s.is_active ? 'var(--color-success)' : 'var(--text-muted)' }}>{s.is_active ? 'Active' : 'Paused'}</span></td>
+                            <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              <button onClick={() => toggleSchedule(s.id, s.is_active)} className="btn btn-outline" style={{ padding: '4px 8px', marginRight: '8px' }} title={s.is_active ? 'Pause schedule' : 'Activate schedule'}>{s.is_active ? <PauseCircle size={14} /> : <Play size={14} />}</button>
+                              <button onClick={() => deleteSchedule(s.id)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>
@@ -1144,7 +1911,9 @@ export default function Dashboard() {
                           </React.Fragment>
                         ))}
                       </div>
-                      <div style={{ display: 'flex', gap: '12px' }}>
+                      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleUpload} />
+                        <button onClick={() => fileInputRef.current?.click()} className="btn btn-outline" disabled={uploading} style={{ padding: '8px 12px' }}><Upload size={16} /><span>{uploading ? 'Uploading...' : 'Upload'}</span></button>
                         {isCreatingFolder ? (
                           <div style={{ display: 'flex', gap: '8px' }}>
                             <input className="form-control" placeholder="Folder name" value={newPathName} onChange={e => setNewPathName(e.target.value)} style={{ padding: '6px 10px', width: '160px' }} />
@@ -1156,6 +1925,15 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="file-list">
+                      {renameTarget && (
+                        <div style={{ display: 'flex', gap: '8px', padding: '8px 12px', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
+                          <Pencil size={14} style={{ color: 'var(--color-primary)' }} />
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{currentPath ? `${currentPath}/` : ''}</span>
+                          <input className="form-control" autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') renameFile() }} placeholder={renameTarget.name} style={{ padding: '4px 8px', width: '220px' }} />
+                          <button onClick={renameFile} className="btn btn-primary" style={{ padding: '4px 10px' }}>Rename</button>
+                          <button onClick={() => setRenameTarget(null)} className="btn btn-outline" style={{ padding: '4px 10px' }}><X size={14} /></button>
+                        </div>
+                      )}
                       {files.map(f => (
                         <div key={f.name} className="file-row">
                           <div className="file-name" onClick={() => handleFileClick(f)}>
@@ -1163,7 +1941,11 @@ export default function Dashboard() {
                             <span>{f.name}</span>
                           </div>
                           <div className="file-meta">{!f.is_directory && `${(f.size / 1024).toFixed(1)} KB`}</div>
-                          <button onClick={() => deleteFile(f)} style={{ color: 'var(--color-danger)', opacity: 0.6, marginLeft: '24px' }}><Trash2 size={16} /></button>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '16px' }}>
+                            {!f.is_directory && <button onClick={() => downloadFile(f)} title="Download" style={{ color: 'var(--text-muted)', opacity: 0.6 }}><Download size={16} /></button>}
+                            <button onClick={() => { setRenameTarget(f); setRenameValue(f.name) }} title="Rename" style={{ color: 'var(--text-muted)', opacity: 0.6 }}><Pencil size={16} /></button>
+                            <button onClick={() => deleteFile(f)} title="Delete" style={{ color: 'var(--color-danger)', opacity: 0.6 }}><Trash2 size={16} /></button>
+                          </div>
                         </div>
                       ))}
                       {files.length === 0 && <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Empty directory</div>}
