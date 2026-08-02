@@ -199,16 +199,14 @@ preflight() {
     detect_os
 
     if [ ! -f "$INSTALL_DIR/docker-compose.yml" ]; then
-        if [ "${SCRIPT_ARGS[0]:-menu}" = "download" ]; then
+        if [ "${SCRIPT_ARGS[0]:-auto}" = "download" ]; then
             return 0
         fi
         warn "docker-compose.yml not found in $INSTALL_DIR."
-        if confirm "Download Wings Panel (with docker-compose.yml) from GitHub into $INSTALL_DIR/wings-panel?"; then
-            download_repo "$INSTALL_DIR/wings-panel"
-            info "Re-running the installer from the downloaded repo..."
-            exec bash "$INSTALL_DIR/wings-panel/install.sh" "${SCRIPT_ARGS[@]}"
-        fi
-        fail "docker-compose.yml is required. Run this installer again and approve the GitHub download, or clone the repo: git clone $REPO_URL"
+        info "Auto-downloading Wings Panel from GitHub (branch: $REPO_BRANCH)..."
+        download_repo "$INSTALL_DIR/wings-panel"
+        info "Re-running the installer from the downloaded repo..."
+        exec bash "$INSTALL_DIR/wings-panel/install.sh" "${SCRIPT_ARGS[@]}"
     fi
 
     if ! command -v curl &>/dev/null; then
@@ -501,14 +499,39 @@ usage() {
     echo "  daemon     Install Daemon only"
     echo "  update     Update images and restart"
     echo "  download   Download the source from GitHub (with docker-compose.yml)"
+    echo "  menu       Show the interactive menu"
     echo "  uninstall  Stop and remove all services (with confirmation)"
     echo "  help       Show this help"
     echo ""
     echo "Env vars: WINGS_PANEL_REPO (default: $REPO_URL), WINGS_PANEL_BRANCH (default: $REPO_BRANCH)"
     echo ""
-    echo "With no command, an interactive menu is shown."
-    echo "If docker-compose.yml is missing, the installer downloads the repo from GitHub automatically."
+    echo "With no command: the first run downloads Wings Panel from GitHub and installs it."
+    echo "Later runs only update the existing stack (no re-download, no menu)."
+    echo "Use '$0 menu' if you want the interactive menu."
     exit 0
+}
+
+# auto is the default action when no command is given.
+# First run (no docker-compose.yml yet): download from GitHub, then install.
+# Later runs: never re-download, just update the existing stack. No menu.
+auto() {
+    if [ ! -f "$INSTALL_DIR/docker-compose.yml" ]; then
+        info "No existing installation found. Downloading Wings Panel from GitHub..."
+        download_repo "$INSTALL_DIR/wings-panel"
+        info "Installing from the downloaded copy..."
+        exec bash "$INSTALL_DIR/wings-panel/install.sh" "${SCRIPT_ARGS[@]}"
+    fi
+
+    if $COMPOSE ps --format '{{.Name}}' 2>/dev/null | grep -q .; then
+        info "Installation already present. Running update (no GitHub re-download)..."
+        update
+    else
+        info "Code present but nothing running. Installing..."
+        install_full
+    fi
+    wait_for_services all
+    show_logs
+    summary
 }
 
 menu() {
@@ -547,7 +570,7 @@ preflight
 setup_env
 create_network
 
-case "${1:-menu}" in
+case "${1:-auto}" in
     install)   fetch_latest; stop_all; install_full; wait_for_services all; show_logs; summary ;;
     panel)     install_panel; wait_for_services panel; summary ;;
     daemon)    install_daemon; wait_for_services daemon ;;
@@ -559,6 +582,7 @@ case "${1:-menu}" in
                fi ;;
     uninstall) uninstall ;;
     help|-h|--help) usage ;;
-    menu|"")   menu ;;
+    menu)      menu ;;
+    auto|"")   auto ;;
     *)         warn "Unknown command: $1"; usage ;;
 esac
