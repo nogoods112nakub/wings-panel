@@ -418,6 +418,7 @@ func main() {
 	// --- Configure Router Endpoints ---
 	http.HandleFunc("/api/system", handleSystem)
 	http.HandleFunc("/api/system/networks", handleSystemNetworks)
+	http.HandleFunc("/api/system/networks/", handleSystemNetworkDelete)
 	http.HandleFunc("/api/system/build", handleDockerBuild)
 	http.HandleFunc("/api/servers", handleServers)
 	http.HandleFunc("/api/servers/", handleServerSpecific)
@@ -528,27 +529,108 @@ func handleSystemNetworks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	networks, err := cli.NetworkList(context.Background(), types.NetworkListOptions{})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+	switch r.Method {
+	case http.MethodGet:
+		networks, err := cli.NetworkList(context.Background(), types.NetworkListOptions{})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		type netInfo struct {
+			Name   string `json:"name"`
+			ID     string `json:"id"`
+			Driver string `json:"driver"`
+			Scope  string `json:"scope"`
+		}
+		var result []netInfo
+		for _, n := range networks {
+			shortID := n.ID
+			if len(shortID) > 12 {
+				shortID = shortID[:12]
+			}
+			result = append(result, netInfo{
+				Name:   n.Name,
+				ID:     shortID,
+				Driver: n.Driver,
+				Scope:  n.Scope,
+			})
+		}
+		json.NewEncoder(w).Encode(result)
+
+	case http.MethodPost:
+		var body struct {
+			Name       string `json:"name"`
+			Driver     string `json:"driver"`
+			Subnet     string `json:"subnet"`
+			Gateway    string `json:"gateway"`
+			IPVLAN     string `json:"ipvlan"`
+			Macvlan    string `json:"macvlan"`
+			IPAMDriver string `json:"ipam_driver"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(body.Name) == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+		driver := body.Driver
+		if driver == "" {
+			driver = "bridge"
+		}
+		ipam := &network.IPAM{}
+		if body.Subnet != "" {
+			ipam.Driver = body.IPAMDriver
+			if ipam.Driver == "" {
+				ipam.Driver = "default"
+			}
+			ipam.Config = []network.IPAMConfig{{Subnet: body.Subnet, Gateway: body.Gateway}}
+		}
+		resp, err := cli.NetworkCreate(context.Background(), body.Name, types.NetworkCreate{
+			Driver: driver,
+			IPAM:   ipam,
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to create network: %v", err), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{
+			"name":    body.Name,
+			"id":      resp.ID,
+			"status":  "created",
+			"warning": resp.Warning,
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleSystemNetworkDelete(w http.ResponseWriter, r *http.Request) {
+	if !verifyToken(w, r) {
 		return
 	}
-	type netInfo struct {
-		Name   string `json:"name"`
-		ID     string `json:"id"`
-		Driver string `json:"driver"`
-		Scope  string `json:"scope"`
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	var result []netInfo
-	for _, n := range networks {
-		result = append(result, netInfo{
-			Name:   n.Name,
-			ID:     n.ID[:12],
-			Driver: n.Driver,
-			Scope:  n.Scope,
-		})
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/system/networks/"), "/")
+	if name == "" {
+		http.Error(w, "network name required", http.StatusBadRequest)
+		return
 	}
-	json.NewEncoder(w).Encode(result)
+	cli, err := getDockerClient()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if err := cli.NetworkRemove(context.Background(), name); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to remove network: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func handleDockerBuild(w http.ResponseWriter, r *http.Request) {
@@ -1765,13 +1847,35 @@ func handleCloneServer(w http.ResponseWriter, r *http.Request, uuid string, cli 
 
 	portBindings := nat.PortMap{}
 	exposedPorts := nat.PortSet{}
-	for portStr := range inspect.Config.ExposedPorts {
-		tcpPort := nat.Port(portStr)
-		exposedPorts[tcpPort] = struct{}{}
-		portBindings[tcpPort] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: strings.Split(string(portStr), "/")[0]}}
+	var payload struct {
+		Port int `json:"port"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+
+	useHostNetwork := payload.Port <= 0
+	if useHostNetwork {
+		for portStr := range inspect.Config.ExposedPorts {
+			exposedPorts[nat.Port(portStr)] = struct{}{}
+		}
+	} else {
+		hostPort := fmt.Sprintf("%d", payload.Port)
+		first := true
+		for portStr := range inspect.Config.ExposedPorts {
+			tcpPort := nat.Port(portStr)
+			exposedPorts[tcpPort] = struct{}{}
+			if first {
+				portBindings[tcpPort] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: hostPort}}
+				first = false
+			}
+		}
 	}
 
 	envVars := inspect.Config.Env
+	for i, env := range envVars {
+		if strings.HasPrefix(env, "SERVER_PORT=") {
+			envVars[i] = fmt.Sprintf("SERVER_PORT=%d", payload.Port)
+		}
+	}
 
 	config := &container.Config{
 		Image:        image,
@@ -1783,12 +1887,17 @@ func handleCloneServer(w http.ResponseWriter, r *http.Request, uuid string, cli 
 		OpenStdin:    true,
 	}
 
+	networkMode := hostConfig.NetworkMode
+	if useHostNetwork {
+		networkMode = "host"
+	}
+
 	resp, err := cli.ContainerCreate(ctx, config,
 		&container.HostConfig{
 			PortBindings: portBindings,
 			Binds:        volumeBinds,
 			Resources:    hostConfig.Resources,
-			NetworkMode:  hostConfig.NetworkMode,
+			NetworkMode:  networkMode,
 			RestartPolicy: container.RestartPolicy{
 				Name: "no",
 			},

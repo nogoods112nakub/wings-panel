@@ -617,6 +617,17 @@ export default function Dashboard() {
     })
   }
 
+  const submitBugReport = async () => {
+    if (!bugReportTitle.trim()) { showPopup('error', 'Missing Title', 'Enter a title for the report'); return }
+    setBugReportLoading(true)
+    try {
+      const res = await apiFetch('/api/bug-reports', { method: 'POST', body: JSON.stringify({ title: bugReportTitle.trim(), description: bugReportDesc.trim(), severity: bugReportSeverity, browser_info: navigator.userAgent }) })
+      if (res.ok) { showPopup('success', 'Submitted', 'Bug report submitted. Thank you!'); setShowBugReport(false); setBugReportTitle(''); setBugReportDesc(''); setBugReportSeverity('medium') }
+      else { const e = await res.json(); showPopup('error', 'Submit Failed', typeof e.detail === 'string' ? e.detail : 'Failed to submit report') }
+    } catch { showPopup('error', 'Error', 'Connection failed') }
+    setBugReportLoading(false)
+  }
+
   const fetchFiles = async (serverId: number, path: string) => {
     try { const res = await apiFetch(`/api/servers/${serverId}/files/list?path=${encodeURIComponent(path)}`); if (res.ok) setFiles(await res.json()) } catch {}
   }
@@ -1776,6 +1787,34 @@ export default function Dashboard() {
                   <div className="popup-actions">
                     <button className="btn btn-outline" onClick={() => setShowPlayitDialog(false)}>Cancel</button>
                     <button className="btn btn-primary" onClick={createPlayitTunnel} disabled={playitLoading}>{playitLoading ? 'Creating...' : 'Create'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showBugReport && (
+              <div className="popup-overlay" onClick={() => setShowBugReport(false)}>
+                <div className="popup-box" onClick={e => e.stopPropagation()}>
+                  <h3 className="popup-title">Report a Bug</h3>
+                  <div className="form-group">
+                    <label className="form-label">Title</label>
+                    <input className="form-control" value={bugReportTitle} onChange={e => setBugReportTitle(e.target.value)} placeholder="Short summary of the issue" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Description</label>
+                    <textarea className="form-control" value={bugReportDesc} onChange={e => setBugReportDesc(e.target.value)} placeholder="What happened? Steps to reproduce, expected vs actual..." rows={4} style={{ resize: 'vertical' }} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Severity</label>
+                    <select className="form-control" value={bugReportSeverity} onChange={e => setBugReportSeverity(e.target.value)}>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="critical">Critical</option>
+                    </select>
+                  </div>
+                  <div className="popup-actions">
+                    <button className="btn btn-outline" onClick={() => setShowBugReport(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={submitBugReport} disabled={bugReportLoading}>{bugReportLoading ? 'Submitting...' : 'Submit'}</button>
                   </div>
                 </div>
               </div>

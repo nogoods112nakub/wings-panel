@@ -6,7 +6,7 @@ import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, Query, Response
+from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -1732,6 +1732,13 @@ async def clone_server(server_id: int, db: Session = Depends(get_db), user: mode
     if not node:
         raise HTTPException(status_code=404, detail="No node assigned")
 
+    # Find a free allocation for the cloned server
+    alloc = db.query(models.Allocation).filter(
+        models.Allocation.node_id == srv.node_id,
+        models.Allocation.server_id.is_(None),
+    ).order_by(models.Allocation.id).first()
+    clone_port = alloc.port if alloc else 0
+
     clone_payload = {
         "source_uuid": srv.uuid,
         "docker_image": srv.docker_image,
@@ -1740,27 +1747,23 @@ async def clone_server(server_id: int, db: Session = Depends(get_db), user: mode
         "memory_limit": srv.memory_limit,
         "disk_limit": srv.disk_limit,
         "startup_command": srv.startup_command or "",
+        "port": clone_port,
     }
 
     try:
-        resp = await call_daemon(node, "/api/servers/clone", method="POST", json_data=clone_payload)
+        resp = await call_daemon(node, f"/api/servers/{srv.uuid}/clone", method="POST", json_data=clone_payload)
         new_uuid = resp.get("new_uuid")
         if not new_uuid:
             raise HTTPException(status_code=500, detail="Daemon did not return a new UUID")
     except HTTPException as e:
         raise e
 
-    # Find a free allocation for the cloned server
-    alloc = db.query(models.Allocation).filter(
-        models.Allocation.node_id == srv.node_id,
-        models.Allocation.server_id.is_(None),
-    ).order_by(models.Allocation.id).first()
-
     new_server = models.Server(
         name=f"{srv.name} (Clone)",
         description=f"Cloned from {srv.name}",
         owner_id=user.id,
         node_id=srv.node_id,
+        uuid=new_uuid,
         primary_allocation_id=alloc.id if alloc else None,
         cpu_limit=srv.cpu_limit,
         memory_limit=srv.memory_limit,
@@ -1925,7 +1928,9 @@ def delete_server_group(group_id: int, db: Session = Depends(get_db), admin: mod
 # BUG REPORT ENDPOINTS
 # =============================================================================
 @app.post("/api/bug-reports", response_model=schemas.BugReportResponse, status_code=201)
-def create_bug_report(body: schemas.BugReportCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def create_bug_report(body: schemas.BugReportCreate, request: Request, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    forwarded = request.headers.get("x-forwarded-for")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else None)
     report = models.BugReport(
         user_id=user.id,
         username=user.username,
@@ -1934,7 +1939,7 @@ def create_bug_report(body: schemas.BugReportCreate, db: Session = Depends(get_d
         severity=body.severity,
         screenshot_url=body.screenshot_url,
         browser_info=body.browser_info,
-        ip_address=user.id,
+        ip_address=client_ip,
     )
     db.add(report)
     db.commit()
@@ -1962,7 +1967,7 @@ def list_bug_reports(
     return query.order_by(models.BugReport.created_at.desc()).offset(offset).limit(limit).all()
 
 
-@app.patch("/api/bug-reports/{report_id}")
+@app.patch("/api/bug-reports/{report_id}", response_model=schemas.BugReportResponse)
 def update_bug_report(report_id: int, body: dict, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
     report = db.query(models.BugReport).filter(models.BugReport.id == report_id).first()
     if not report:
