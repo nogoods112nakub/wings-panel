@@ -86,6 +86,7 @@ export default function Dashboard() {
 
   const [currentPath, setCurrentPath] = useState('')
   const [files, setFiles] = useState<FileEntry[]>([])
+  const [fileError, setFileError] = useState('')
   const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null)
   const [newPathName, setNewPathName] = useState('')
   const [isCreatingFolder, setIsCreatingFolder] = useState(false)
@@ -106,15 +107,18 @@ export default function Dashboard() {
   const [formStartup, setFormStartup] = useState('java -Xmx1024M -jar server.jar nogui')
   const [formStartupAuto, setFormStartupAuto] = useState(true)
   const [formPreset, setFormPreset] = useState('')
+  const [formGameVersion, setFormGameVersion] = useState('')
+  const [formEnv, setFormEnv] = useState<Record<string, string>>({})
+  const [formEnvText, setFormEnvText] = useState('')
   const [dockerNetworks, setDockerNetworks] = useState<{ name: string; id: string; driver: string; scope: string }[]>([])
   const [formUseDockerfile, setFormUseDockerfile] = useState(false)
   const [formDockerfile, setFormDockerfile] = useState('')
   const [formImageName, setFormImageName] = useState('')
   const [isBuildingImage, setIsBuildingImage] = useState(false)
 
-  const GAME_PRESETS: { id: string; label: string; image: string; startup: string; memory: number; disk: number; icon: string; allocPort: number }[] = [
-    { id: 'mc-java', label: 'Minecraft: Java Edition', image: 'itzg/minecraft-server', startup: 'java -Xmx$MEMORY -jar server.jar nogui', memory: 2048, disk: 10240, icon: '⛏', allocPort: 25565 },
-    { id: 'mc-bedrock', label: 'Minecraft: Bedrock Edition', image: 'itzg/minecraft-bedrock-server', startup: '', memory: 2048, disk: 10240, icon: '⛏', allocPort: 25535 },
+  const GAME_PRESETS: { id: string; label: string; image: string; startup: string; memory: number; disk: number; icon: string; allocPort: number; env?: Record<string, string>; versionOptions?: string[]; defaultVersion?: string }[] = [
+    { id: 'mc-java', label: 'Minecraft: Java Edition', image: 'itzg/minecraft-server', startup: 'java -Xmx$MEMORY -jar server.jar nogui', memory: 2048, disk: 10240, icon: '⛏', allocPort: 25565, env: { EULA: 'TRUE', TYPE: 'PAPER' }, versionOptions: ['LATEST', '1.21.1', '1.21', '1.20.6', '1.20.4', '1.20.1', '1.19.4', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.12.2', '1.8.9'], defaultVersion: 'LATEST' },
+    { id: 'mc-bedrock', label: 'Minecraft: Bedrock Edition', image: 'itzg/minecraft-bedrock-server', startup: '', memory: 2048, disk: 10240, icon: '⛏', allocPort: 25535, env: { EULA: 'TRUE' }, versionOptions: ['LATEST', '1.21.62', '1.21.51', '1.21.50', '1.21.30', '1.20.81', '1.20.73'], defaultVersion: 'LATEST' },
     { id: 'terraria', label: 'Terraria', image: 'ryshe/terraria', startup: '', memory: 1024, disk: 5120, icon: '🌙', allocPort: 7777 },
     { id: 'cs2', label: 'Counter-Strike 2', image: 'ich777/steamcmd:cs2', startup: '', memory: 4096, disk: 20480, icon: '🔫', allocPort: 27015 },
     { id: 'valheim', label: 'Valheim', image: 'lloesche/valheim-server', startup: '', memory: 2048, disk: 10240, icon: '⚔', allocPort: 2456 },
@@ -294,8 +298,13 @@ export default function Dashboard() {
 
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
     const res = await fetch(`${API_BASE}${path}`, { ...opts, headers: { ...authHeaders(), ...opts.headers } })
+    if (res.status === 401) {
+      setToken(null); setUser(null); localStorage.removeItem('panel_token')
+    }
     return res
   }, [authHeaders])
+
+  const asArray = (d: any): any[] => Array.isArray(d) ? d : []
 
   useEffect(() => {
     const saved = localStorage.getItem('panel_token')
@@ -349,23 +358,23 @@ export default function Dashboard() {
   const fetchAll = async () => {
     try {
       const nRes = await apiFetch('/api/nodes')
-      if (nRes.ok) setNodes(await nRes.json())
+      if (nRes.ok) setNodes(asArray(await nRes.json()))
       const sRes = await apiFetch('/api/servers')
-      if (sRes.ok) setServers(await sRes.json())
+      if (sRes.ok) setServers(asArray(await sRes.json()))
       const aRes = await apiFetch('/api/allocations')
-      if (aRes.ok) setAllocations(await aRes.json())
+      if (aRes.ok) setAllocations(asArray(await aRes.json()))
       try { const sysRes = await apiFetch('/api/system/status'); if (sysRes.ok) setSystemStatus(await sysRes.json()) } catch {}
-      try { const sumRes = await apiFetch('/api/system/nodes-summary'); if (sumRes.ok) setNodeSummaries(await sumRes.json()) } catch {}
-      try { const netRes = await apiFetch('/api/system/docker-networks'); if (netRes.ok) setDockerNetworks(await netRes.json()) } catch {}
-      try { const grpRes = await apiFetch('/api/server-groups'); if (grpRes.ok) setServerGroups(await grpRes.json()) } catch {}
+      try { const sumRes = await apiFetch('/api/system/nodes-summary'); if (sumRes.ok) setNodeSummaries(asArray(await sumRes.json())) } catch {}
+      try { const netRes = await apiFetch('/api/system/docker-networks'); if (netRes.ok) setDockerNetworks(asArray(await netRes.json())) } catch {}
+      try { const grpRes = await apiFetch('/api/server-groups'); if (grpRes.ok) setServerGroups(asArray(await grpRes.json())) } catch {}
       if (activeTab === 'system') {
-        try { const cfRes = await apiFetch('/api/cloudflare/dns/list'); if (cfRes.ok) { const d = await cfRes.json(); setCloudflareRecords(d.records || []) } } catch {}
-        try { const ptRes = await apiFetch('/api/playit/tunnel/list'); if (ptRes.ok) { const d = await ptRes.json(); setPlayitTunnels(d.tunnels || []) } } catch {}
-        try { const imgRes = await apiFetch('/api/system/images'); if (imgRes.ok) setDockerImages(await imgRes.json()) } catch {}
+        try { const cfRes = await apiFetch('/api/cloudflare/dns/list'); if (cfRes.ok) { const d = await cfRes.json(); setCloudflareRecords(asArray(d.records)) } } catch {}
+        try { const ptRes = await apiFetch('/api/playit/tunnel/list'); if (ptRes.ok) { const d = await ptRes.json(); setPlayitTunnels(asArray(d.tunnels)) } } catch {}
+        try { const imgRes = await apiFetch('/api/system/images'); if (imgRes.ok) setDockerImages(asArray(await imgRes.json())) } catch {}
       }
       if (activeTab === 'dashboard') {
-        try { const actRes = await apiFetch('/api/activity?limit=8'); if (actRes.ok) setActivityLogs(await actRes.json()) } catch {}
-        try { const annRes = await apiFetch('/api/announcements'); if (annRes.ok) setAnnouncements(await annRes.json()) } catch {}
+        try { const actRes = await apiFetch('/api/activity?limit=8'); if (actRes.ok) setActivityLogs(asArray(await actRes.json())) } catch {}
+        try { const annRes = await apiFetch('/api/announcements'); if (annRes.ok) setAnnouncements(asArray(await annRes.json())) } catch {}
       }
       if (activeTab === 'templates') { try { await fetchTemplates() } catch {} }
       if (activeTab === 'webhooks') { try { await fetchWebhooks() } catch {} }
@@ -504,7 +513,7 @@ export default function Dashboard() {
   }
 
   const fetchSchedules = async (serverId: number) => {
-    try { const res = await apiFetch(`/api/servers/${serverId}/schedules`); if (res.ok) setSchedules(await res.json()) } catch {}
+    try { const res = await apiFetch(`/api/servers/${serverId}/schedules`); if (res.ok) setSchedules(asArray(await res.json())) } catch {}
   }
 
   const createSchedule = async () => {
@@ -615,7 +624,7 @@ export default function Dashboard() {
   }
 
   const fetchMembers = async (serverId: number) => {
-    try { const res = await apiFetch(`/api/servers/${serverId}/members`); if (res.ok) setMembers(await res.json()) } catch {}
+    try { const res = await apiFetch(`/api/servers/${serverId}/members`); if (res.ok) setMembers(asArray(await res.json())) } catch {}
   }
 
   const addMember = async () => {
@@ -645,7 +654,7 @@ export default function Dashboard() {
   // --- Backups ---
   const fetchBackups = async (serverId: number) => {
     setBackupsLoading(true)
-    try { const res = await apiFetch(`/api/servers/${serverId}/backups`); if (res.ok) setBackups(await res.json()) } catch {}
+    try { const res = await apiFetch(`/api/servers/${serverId}/backups`); if (res.ok) setBackups(asArray(await res.json())) } catch {}
     setBackupsLoading(false)
   }
 
@@ -699,12 +708,12 @@ export default function Dashboard() {
 
   // --- Per-server activity ---
   const fetchServerActivity = async (serverId: number) => {
-    try { const res = await apiFetch(`/api/servers/${serverId}/activity?limit=20`); if (res.ok) setServerActivity(await res.json()) } catch {}
+    try { const res = await apiFetch(`/api/servers/${serverId}/activity?limit=20`); if (res.ok) setServerActivity(asArray(await res.json())) } catch {}
   }
 
   // --- Templates ---
   const fetchTemplates = async () => {
-    try { const res = await apiFetch('/api/templates'); if (res.ok) setTemplates(await res.json()) } catch {}
+    try { const res = await apiFetch('/api/templates'); if (res.ok) setTemplates(asArray(await res.json())) } catch {}
   }
 
   const applyTemplate = (t: any) => {
@@ -750,7 +759,7 @@ export default function Dashboard() {
 
   // --- Webhooks ---
   const fetchWebhooks = async () => {
-    try { const res = await apiFetch('/api/webhooks'); if (res.ok) setWebhooks(await res.json()) } catch {}
+    try { const res = await apiFetch('/api/webhooks'); if (res.ok) setWebhooks(asArray(await res.json())) } catch {}
   }
 
   const toggleWebhookEvent = (event: string) => {
@@ -788,7 +797,7 @@ export default function Dashboard() {
 
   // --- Announcements ---
   const fetchAnnouncements = async () => {
-    try { const res = await apiFetch('/api/announcements'); if (res.ok) setAnnouncements(await res.json()) } catch {}
+    try { const res = await apiFetch('/api/announcements'); if (res.ok) setAnnouncements(asArray(await res.json())) } catch {}
   }
 
   const saveAnnouncement = async () => {
@@ -826,7 +835,7 @@ export default function Dashboard() {
   // --- Docker images ---
   const fetchDockerImages = async () => {
     setImagesLoading(true)
-    try { const res = await apiFetch('/api/system/images'); if (res.ok) { setDockerImages(await res.json()); setDockerImagesError(null) } else { const e = await res.json().catch(() => null); setDockerImagesError(e?.detail || 'Failed to load images') } } catch { setDockerImagesError('Daemon unreachable') }
+    try { const res = await apiFetch('/api/system/images'); if (res.ok) { setDockerImages(asArray(await res.json())); setDockerImagesError(null) } else { const e = await res.json().catch(() => null); setDockerImagesError(e?.detail || 'Failed to load images') } } catch { setDockerImagesError('Daemon unreachable') }
     setImagesLoading(false)
   }
 
@@ -910,7 +919,7 @@ export default function Dashboard() {
   }
 
   const fetchFiles = async (serverId: number, path: string) => {
-    try { const res = await apiFetch(`/api/servers/${serverId}/files/list?path=${encodeURIComponent(path)}`); if (res.ok) setFiles(await res.json()) } catch {}
+    try { const res = await apiFetch(`/api/servers/${serverId}/files/list?path=${encodeURIComponent(path)}`); if (res.ok) { setFiles(await res.json()); setFileError('') } else { const e = await res.json(); setFileError(e.detail || 'Failed to load files') } } catch { setFileError('Connection failed') }
   }
 
   const refreshFiles = () => { if (selectedServer) fetchFiles(selectedServer.id, currentPath) }
@@ -928,25 +937,28 @@ export default function Dashboard() {
     if (!selectedServer) return
     const fp = currentPath ? `${currentPath}/${file.name}` : file.name
     if (file.is_directory) { setCurrentPath(fp); fetchFiles(selectedServer.id, fp) }
-    else { try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/read?path=${encodeURIComponent(fp)}`); if (res.ok) { const d = await res.json(); setEditingFile({ path: fp, content: d.content }) } } catch {} }
+    else { try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/read?path=${encodeURIComponent(fp)}`); if (res.ok) { const d = await res.json(); setEditingFile({ path: fp, content: d.content }) } else { const e = await res.json(); showPopup('error', 'Cannot Open', e.detail || 'Failed to read file') } } catch { showPopup('error', 'Error', 'Connection failed') } }
   }
 
   const saveFileContent = async () => {
     if (!selectedServer || !editingFile) return
-    try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/write`, { method: 'POST', body: JSON.stringify({ path: editingFile.path, content: editingFile.content }) }); if (res.ok) { setEditingFile(null); showPopup('success', 'Saved', 'File saved successfully.'); refreshFiles() } } catch {}
+    try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/write`, { method: 'POST', body: JSON.stringify({ path: editingFile.path, content: editingFile.content }) }); if (res.ok) { setEditingFile(null); showPopup('success', 'Saved', 'File saved successfully.'); refreshFiles() } else { const e = await res.json(); showPopup('error', 'Save Failed', e.detail || 'Failed to save file') } } catch { showPopup('error', 'Error', 'Connection failed') }
   }
 
   const createFolder = async () => {
     if (!selectedServer || !newPathName) return
     const fp = currentPath ? `${currentPath}/${newPathName}` : newPathName
-    try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/folder`, { method: 'POST', body: JSON.stringify({ path: fp }) }); if (res.ok) { setNewPathName(''); setIsCreatingFolder(false); refreshFiles() } } catch {}
+    try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/folder`, { method: 'POST', body: JSON.stringify({ path: fp }) }); if (res.ok) { setNewPathName(''); setIsCreatingFolder(false); refreshFiles() } else { const e = await res.json(); showPopup('error', 'Create Failed', e.detail || 'Failed to create folder') } } catch { showPopup('error', 'Error', 'Connection failed') }
   }
 
   const deleteFile = async (file: FileEntry) => {
     if (!selectedServer) return
     const fp = currentPath ? `${currentPath}/${file.name}` : file.name
     showPopup('confirm', 'Delete File', `Delete "${file.name}"?`, async () => {
-      try { const res = await apiFetch(`/api/servers/${selectedServer.id}/files/delete?path=${encodeURIComponent(fp)}`, { method: 'DELETE' }); if (res.ok) refreshFiles() } catch {}
+      try {
+        const res = await apiFetch(`/api/servers/${selectedServer.id}/files/delete?path=${encodeURIComponent(fp)}`, { method: 'DELETE' })
+        if (res.ok) { refreshFiles() } else { const e = await res.json(); showPopup('error', 'Delete Failed', e.detail || 'Failed to delete') }
+      } catch { showPopup('error', 'Error', 'Connection failed') }
     })
   }
 
@@ -1001,12 +1013,23 @@ export default function Dashboard() {
     if (selectedServer) fetchFiles(selectedServer.id, pp)
   }
 
+  const parseEnvText = (text: string): Record<string, string> => {
+    const out: Record<string, string> = {}
+    text.split('\n').forEach(line => {
+      const i = line.indexOf('=')
+      if (i > 0) { const k = line.slice(0, i).trim(); const v = line.slice(i + 1).trim(); if (k) out[k] = v }
+    })
+    return out
+  }
+
   const handleCreateServer = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formNodeId) { showPopup('error', 'Missing Info', 'Select a node'); return }
     if (!formImage || !formImage.trim()) { showPopup('error', 'Missing Info', 'Docker image is required'); return }
     try {
-      const body: any = { name: formName, description: formDesc, node_id: formNodeId, primary_allocation_id: formAllocId || 0, cpu_limit: formCpu, memory_limit: formMemory, disk_limit: formDisk, docker_image: formImage, docker_network: formNetwork, startup_command: formUseDockerfile ? '' : formStartup }
+      const envVars: Record<string, string> = { ...formEnv, ...parseEnvText(formEnvText) }
+      if (formGameVersion && formGameVersion !== 'LATEST') envVars.VERSION = formGameVersion
+      const body: any = { name: formName, description: formDesc, node_id: formNodeId, primary_allocation_id: formAllocId || 0, cpu_limit: formCpu, memory_limit: formMemory, disk_limit: formDisk, docker_image: formImage, docker_network: formNetwork, startup_command: formUseDockerfile ? '' : formStartup, env_vars: envVars }
       const res = await apiFetch('/api/servers', { method: 'POST', body: JSON.stringify(body) })
       if (res.ok) { fetchAll(); setActiveTab('servers') }
       else { const e = await res.json(); showPopup('error', 'Deploy Failed', e.detail || 'Failed to create server') }
@@ -1058,7 +1081,7 @@ export default function Dashboard() {
   useEffect(() => { if (activeTab === 'activity') fetchActivity(activityOffset) }, [activeTab, activityOffset, activityFilterServer])
 
   const fetchApiKeys = async () => {
-    try { const res = await apiFetch('/api/keys'); if (res.ok) setApiKeys(await res.json()) } catch {}
+    try { const res = await apiFetch('/api/keys'); if (res.ok) setApiKeys(asArray(await res.json())) } catch {}
   }
 
   useEffect(() => { if (activeTab === 'api-keys') fetchApiKeys() }, [activeTab])
@@ -1081,7 +1104,7 @@ export default function Dashboard() {
 
   // --- Panel Users (Admin) ---
   const fetchPanelUsers = async () => {
-    try { const res = await apiFetch('/api/users'); if (res.ok) setPanelUsers(await res.json()) } catch {}
+    try { const res = await apiFetch('/api/users'); if (res.ok) setPanelUsers(asArray(await res.json())) } catch {}
   }
 
   useEffect(() => { if (activeTab === 'users') fetchPanelUsers() }, [activeTab])
@@ -1173,7 +1196,8 @@ export default function Dashboard() {
 
   if (!token || !user) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-main)' }}>
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)' }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className="card" style={{ width: '420px', padding: '40px' }}>
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
             <div className="logo" style={{ justifyContent: 'center', marginBottom: '8px' }}><Layers size={32} /><span>WINGS PANEL</span></div>
@@ -1189,9 +1213,10 @@ export default function Dashboard() {
           <p style={{ textAlign: 'center', marginTop: '16px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             {authPage === 'login' ? <>No account? <span onClick={() => setAuthPage('register')} style={{ color: 'var(--color-primary)', cursor: 'pointer' }}>Register</span></> : <>Have an account? <span onClick={() => setAuthPage('login')} style={{ color: 'var(--color-primary)', cursor: 'pointer' }}>Sign in</span></>}
           </p>
-          {authPage === 'login' && <p style={{ textAlign: 'center', marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Default: admin / admin12345</p>}
+          {authPage === 'register' && <p style={{ textAlign: 'center', marginTop: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Your email is used only for account recovery.</p>}
         </div>
-        <p style={{ textAlign: 'center', marginTop: '24px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Wings Panel × Pterodactyl Panel &copy; 2026</p>
+        </div>
+        <p style={{ textAlign: 'center', padding: '16px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Wings Panel × Pterodactyl Panel &copy; 2026</p>
       </div>
     )
   }
@@ -1852,7 +1877,7 @@ export default function Dashboard() {
                     <h3 style={{ marginBottom: '16px', fontSize: '1rem' }}>1. Choose Image</h3>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px', marginBottom: '20px' }}>
                       {GAME_PRESETS.map(p => (
-                        <div key={p.id} onClick={() => { setFormPreset(p.id); if (p.id !== 'custom') { setFormImage(p.image); const memStr = `${Math.floor(p.memory / 1024)}G`; setFormStartup(p.startup.replace('$MEMORY', memStr)); setFormMemory(p.memory); setFormDisk(p.disk); setFormStartupAuto(true) } else { setFormImage(''); setFormStartup(''); setFormStartupAuto(false) } if (!formName || GAME_PRESETS.some(gp => gp.label === formName)) { setFormName(p.id === 'custom' ? '' : p.label) } }} style={{ padding: '16px', borderRadius: '10px', cursor: 'pointer', border: formPreset === p.id ? '2px solid var(--color-primary)' : '1px solid var(--border-color)', background: formPreset === p.id ? 'rgba(56,189,248,0.08)' : 'rgba(255,255,255,0.02)', transition: 'all 0.15s ease', textAlign: 'center' }}>
+                        <div key={p.id} onClick={() => { setFormPreset(p.id); if (p.id !== 'custom') { setFormImage(p.image); const memStr = `${Math.floor(p.memory / 1024)}G`; setFormStartup(p.startup.replace('$MEMORY', memStr)); setFormMemory(p.memory); setFormDisk(p.disk); setFormStartupAuto(true); setFormEnv(p.env ? { ...p.env } : {}); setFormEnvText(Object.entries(p.env || {}).map(([k, v]) => `${k}=${v}`).join('\n')); setFormGameVersion(p.defaultVersion || '') } else { setFormImage(''); setFormStartup(''); setFormStartupAuto(false); setFormEnv({}); setFormEnvText(''); setFormGameVersion('') } if (!formName || GAME_PRESETS.some(gp => gp.label === formName)) { setFormName(p.id === 'custom' ? '' : p.label) } }} style={{ padding: '16px', borderRadius: '10px', cursor: 'pointer', border: formPreset === p.id ? '2px solid var(--color-primary)' : '1px solid var(--border-color)', background: formPreset === p.id ? 'rgba(56,189,248,0.08)' : 'rgba(255,255,255,0.02)', transition: 'all 0.15s ease', textAlign: 'center' }}>
                           <div style={{ fontSize: '1.5rem', marginBottom: '6px' }}>{p.icon}</div>
                           <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)' }}>{p.label}</div>
                         </div>
@@ -1862,13 +1887,27 @@ export default function Dashboard() {
                       <button type="button" onClick={() => setFormUseDockerfile(false)} className={`btn ${!formUseDockerfile ? 'btn-primary' : 'btn-outline'}`} style={{ flex: 1, justifyContent: 'center' }}>Pull Image</button>
                       <button type="button" onClick={() => { setFormUseDockerfile(true); if (!formDockerfile) setFormDockerfile('FROM ubuntu:22.04\n\nRUN apt-get update && apt-get install -y curl wget\n\nWORKDIR /home/container\nCOPY . /home/container\n\nEXPOSE 25565\nCMD ["/bin/bash"]') }} className={`btn ${formUseDockerfile ? 'btn-primary' : 'btn-outline'}`} style={{ flex: 1, justifyContent: 'center' }}>Build from Dockerfile</button>
                     </div>
-                    {!formUseDockerfile ? (
+                    {!formUseDockerfile ? (<>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Docker Image</label>
                         <input className="form-control" value={formImage} onChange={e => { setFormImage(e.target.value); setFormPreset('') }} placeholder="e.g. itzg/minecraft-server" required />
                         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>Enter any public Docker Hub or registry image</p>
                       </div>
-                    ) : (<>
+                      {(() => { const preset = GAME_PRESETS.find(p => p.id === formPreset); return preset?.versionOptions ? (
+                        <div className="form-group" style={{ marginBottom: 0, marginTop: '12px' }}>
+                          <label className="form-label">Game Version</label>
+                          <select className="form-control" value={formGameVersion} onChange={e => setFormGameVersion(e.target.value)}>
+                            {preset.versionOptions!.map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>LATEST follows the newest release. Pinning a version lets this image run exactly that game version.</p>
+                        </div>
+                      ) : null })()}
+                      <div className="form-group" style={{ marginBottom: 0, marginTop: '12px' }}>
+                        <label className="form-label">Environment Variables <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(KEY=VALUE, one per line)</span></label>
+                        <textarea className="form-control" rows={4} value={formEnvText} onChange={e => setFormEnvText(e.target.value)} placeholder={'EULA=TRUE\nVERSION=1.20.4'} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }} />
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>Passed to the container; used by images to pick versions/modes (VERSION, TYPE, DIFFICULTY, ...).</p>
+                      </div>
+                    </>) : (<>
                       <div className="form-group"><label className="form-label">Image Name</label><input className="form-control" value={formImageName} onChange={e => setFormImageName(e.target.value)} placeholder="e.g. my-server:latest" required /></div>
                       <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label">Dockerfile</label><textarea className="form-control" rows={14} value={formDockerfile} onChange={e => setFormDockerfile(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', whiteSpace: 'pre' }} /></div>
                       <button type="button" onClick={buildDockerImage} disabled={isBuildingImage || !formDockerfile || !formImageName} className="btn btn-primary" style={{ marginTop: '12px' }}>{isBuildingImage ? 'Building...' : 'Build Image'}</button>
@@ -2158,14 +2197,15 @@ export default function Dashboard() {
               </div>
               <div style={{ height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => reinstallServer(selectedServer)} className="btn btn-outline" style={{ color: 'var(--color-warning)', borderColor: 'rgba(245,158,11,0.2)' }}><RotateCcw size={16} /><span>Reinstall</span></button>
+                {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => reinstallServer(selectedServer)} className="btn btn-outline" style={{ color: 'var(--color-warning)', borderColor: 'rgba(245,158,11,0.2)' }}><RotateCcw size={16} /><span>Reinstall</span></button>}
                 {user.root_admin && <button onClick={() => transferServer(selectedServer)} className="btn btn-outline"><ArrowRight size={16} /><span>Transfer</span></button>}
                 {user.root_admin && <button onClick={() => suspendServer(selectedServer, selectedServer.status !== 'suspended')} className="btn btn-outline" style={{ color: 'var(--color-danger)', borderColor: 'rgba(239,68,68,0.2)' }}><PauseCircle size={16} /><span>{selectedServer.status === 'suspended' ? 'Unsuspend' : 'Suspend'}</span></button>}
-                <button onClick={() => { setCloneName(`${selectedServer.name}-clone`); setShowCloneDialog(true) }} className="btn btn-outline" style={{ color: 'var(--color-secondary)', borderColor: 'rgba(168,85,247,0.2)' }}><Layers size={16} /><span>Clone</span></button>
+                {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => { setCloneName(`${selectedServer.name}-clone`); setShowCloneDialog(true) }} className="btn btn-outline" style={{ color: 'var(--color-secondary)', borderColor: 'rgba(168,85,247,0.2)' }}><Layers size={16} /><span>Clone</span></button>}
               </div>
               <div style={{ height: '24px', borderRight: '1px solid var(--border-color)', margin: '0 8px' }}></div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => openSettingsDialog(selectedServer)} className="btn btn-outline"><Settings2 size={16} /><span>Settings</span></button>
+                {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => openSettingsDialog(selectedServer)} className="btn btn-outline"><Settings2 size={16} /><span>Settings</span></button>}
+                {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => { if (window.confirm(`Delete server "${selectedServer.name}"? This permanently removes its container and data.`)) deleteServer(selectedServer) }} className="btn btn-danger"><Trash2 size={16} /><span>Delete</span></button>}
                 {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => openShareDialog(selectedServer)} className="btn btn-outline"><Share2 size={16} /><span>Share</span></button>}
                 {user.root_admin && <button onClick={() => { setTemplateForm({ name: `${selectedServer.name} Template`, description: selectedServer.description || '', docker_image: selectedServer.docker_image, docker_network: selectedServer.docker_network, startup_command: selectedServer.startup_command || '', cpu_limit: selectedServer.cpu_limit, memory_limit: selectedServer.memory_limit, disk_limit: selectedServer.disk_limit, alloc_port: selectedServer.allocations?.[0]?.port, featured: false }); setShowTemplateDialog(true) }} className="btn btn-outline"><FileText size={16} /><span>Save as Template</span></button>}
               </div>
@@ -2607,7 +2647,7 @@ export default function Dashboard() {
               <div>
                 <div className="header-wrapper">
                   <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Backups</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Snapshot and restore server files</p></div>
-                  <button onClick={createBackup} className="btn btn-primary" disabled={creatingBackup}><HardDrive size={14} /><span>{creatingBackup ? 'Creating...' : 'Create Backup'}</span></button>
+                  {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={createBackup} className="btn btn-primary" disabled={creatingBackup}><HardDrive size={14} /><span>{creatingBackup ? 'Creating...' : 'Create Backup'}</span></button>}
                 </div>
                 {backupsLoading ? (
                   <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading backups...</div>
@@ -2629,8 +2669,10 @@ export default function Dashboard() {
                             <td style={{ padding: '12px 14px' }}>{b.size ? `${(b.size / 1048576).toFixed(1)} MB` : '—'}</td>
                             <td style={{ padding: '12px 14px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{b.created_at ? new Date(b.created_at).toLocaleString() : '—'}</td>
                             <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                              <button onClick={() => restoreBackup(b.id)} className="btn btn-outline" style={{ padding: '4px 10px', marginRight: '8px' }}><RotateCcw size={14} /><span>Restore</span></button>
-                              <button onClick={() => deleteBackup(b.id)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                              {(user.root_admin || selectedServer.owner_id === user.id) && <>
+                                <button onClick={() => restoreBackup(b.id)} className="btn btn-outline" style={{ padding: '4px 10px', marginRight: '8px' }}><RotateCcw size={14} /><span>Restore</span></button>
+                                <button onClick={() => deleteBackup(b.id)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                              </>}
                             </td>
                           </tr>
                         ))}
@@ -2646,6 +2688,7 @@ export default function Dashboard() {
                 <div className="header-wrapper">
                   <div><h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Members</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Users with access to this server</p></div>
                 </div>
+                {(user.root_admin || selectedServer.owner_id === user.id) ? (
                 <div className="card" style={{ marginBottom: '24px', display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                   <div style={{ flex: 1, minWidth: '220px' }}>
                     <label className="form-label">Username or Email</label>
@@ -2653,6 +2696,9 @@ export default function Dashboard() {
                   </div>
                   <button onClick={addMember} className="btn btn-primary"><Plus size={14} /><span>Add Member</span></button>
                 </div>
+                ) : (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px' }}>Only the owner can manage members.</p>
+                )}
                 {members.length === 0 ? (
                   <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>No members. Only the owner has access.</div>
                 ) : (
@@ -2668,6 +2714,7 @@ export default function Dashboard() {
                           <tr key={m.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                             <td style={{ padding: '12px 14px' }}><strong>{m.username}</strong> <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>({m.email})</span></td>
                             <td style={{ padding: '12px 14px' }}>
+                              {(user.root_admin || selectedServer.owner_id === user.id) && (
                               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                 {(['console', 'power', 'files', 'schedules', 'logs'] as const).map(p => {
                                   const has = (m.permissions || '').split(',').map((x: string) => x.trim()).includes(p)
@@ -2676,9 +2723,10 @@ export default function Dashboard() {
                                   )
                                 })}
                               </div>
+                              )}
                             </td>
                             <td style={{ padding: '12px 14px', textAlign: 'right' }}>
-                              <button onClick={() => removeMember(m)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>
+                              {(user.root_admin || selectedServer.owner_id === user.id) && <button onClick={() => removeMember(m)} className="btn btn-danger" style={{ padding: '4px 8px' }}><Trash2 size={14} /></button>}
                             </td>
                           </tr>
                         ))}
@@ -2758,6 +2806,7 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="file-list">
+                      {fileError && <div style={{ padding: '12px 14px', marginBottom: '8px', borderRadius: '6px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: 'var(--color-danger)', fontSize: '0.85rem' }}>{fileError}</div>}
                       {renameTarget && (
                         <div style={{ display: 'flex', gap: '8px', padding: '8px 12px', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
                           <Pencil size={14} style={{ color: 'var(--color-primary)' }} />

@@ -194,6 +194,80 @@ var (
 	installs   = map[string]chan struct{}{}
 )
 
+// imageListCache caches the docker image list to avoid serializing concurrent
+// ImageList calls on the docker daemon (which takes a global lock per request).
+// Uses single-flight so only one request refreshes the cache at a time.
+// Invalidated on image pull/build/delete.
+type imageListCacheT struct {
+	mu       sync.Mutex
+	data     []map[string]interface{}
+	ts       time.Time
+	ttl      time.Duration
+	inflight bool
+	done     chan struct{}
+}
+
+var imageListCache = imageListCacheT{ttl: 10 * time.Second}
+
+func (c *imageListCacheT) get() ([]map[string]interface{}, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.data != nil && time.Since(c.ts) < c.ttl {
+		return c.data, true
+	}
+	return nil, false
+}
+
+func (c *imageListCacheT) set(data []map[string]interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = data
+	c.ts = time.Now()
+}
+
+func (c *imageListCacheT) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = nil
+	c.ts = time.Time{}
+}
+
+// beginRefresh starts a single-flight refresh. Returns (true, false) if this
+// caller should perform the fetch, or (false, true) if another caller is
+// already fetching and this one should just wait on the returned channel.
+func (c *imageListCacheT) beginRefresh() (shouldFetch bool, done chan struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.data != nil && time.Since(c.ts) < c.ttl {
+		return false, nil
+	}
+	if c.inflight {
+		return false, c.done
+	}
+	c.inflight = true
+	c.done = make(chan struct{})
+	return true, nil
+}
+
+func (c *imageListCacheT) finishRefresh() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.inflight {
+		return
+	}
+	c.inflight = false
+	close(c.done)
+}
+
+// installInFlight reports whether an install/reinstall is currently running
+// for the given server uuid (e.g. an image pull is still in progress).
+func installInFlight(uuid string) bool {
+	installsMu.Lock()
+	defer installsMu.Unlock()
+	_, ok := installs[uuid]
+	return ok
+}
+
 // registerInstall marks an install/reinstall goroutine as in-flight for a UUID
 // and returns the function to call when the operation finishes.
 func registerInstall(uuid string) func() {
@@ -295,6 +369,64 @@ func getDockerClient() (*client.Client, error) {
 	return c, nil
 }
 
+// dockerNegotiationClient is a fallback client built with automatic API version
+// negotiation, used if the pinned client ever hits a version mismatch error.
+var dockerNegotiationClient *client.Client
+
+// isVersionError reports whether a Docker error indicates an API version mismatch
+// between the client and server.
+func isVersionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "api version") ||
+		strings.Contains(s, "client version") ||
+		strings.Contains(s, "minimum version") ||
+		strings.Contains(s, "min api version") ||
+		strings.Contains(s, "client is newer than server")
+}
+
+// forceNegotiationClient swaps the active Docker client to one that performs
+// automatic API version negotiation. Some engines reject a client pinned to a
+// specific version even though the negotiated client works, so this is used as
+// a last-resort fallback after a version mismatch error.
+func forceNegotiationClient() {
+	clientMutex.Lock()
+	defer clientMutex.Unlock()
+	if dockerNegotiationClient == nil {
+		dockerNegotiationClient, _ = client.NewClientWithOpts(
+			client.WithHost(DockerURL),
+			client.WithAPIVersionNegotiation(),
+		)
+	}
+	if dockerNegotiationClient != nil {
+		dockerClient = dockerNegotiationClient
+		log.Println("Switched Docker client to API version negotiation fallback.")
+	}
+}
+
+// dockerCall runs fn against the current Docker client, retrying once with the
+// API-version-negotiation fallback client if the first attempt fails with a
+// version mismatch error. This keeps image pull/build and container create
+// working across Docker engines of any API version.
+func dockerCall(fn func(cli *client.Client) error) error {
+	cli, err := getDockerClient()
+	if err != nil {
+		return err
+	}
+	err = fn(cli)
+	if err != nil && isVersionError(err) {
+		log.Printf("Docker API version mismatch (%v); retrying with negotiation fallback.", err)
+		forceNegotiationClient()
+		cli, err = getDockerClient()
+		if err == nil {
+			return fn(cli)
+		}
+	}
+	return err
+}
+
 // verifyToken checks the X-Daemon-Token header or token query parameter
 func verifyToken(w http.ResponseWriter, r *http.Request) bool {
 	token := r.Header.Get("X-Daemon-Token")
@@ -367,7 +499,8 @@ type ServerInstallPayload struct {
 	PrimaryPort    int                 `json:"primary_port"`
 	Allocations    []AllocationPayload `json:"allocations"`
 	StartupCommand string              `json:"startup_command"`
-	HostNetwork     bool                `json:"host_network"`
+	Env            map[string]string   `json:"env"`
+	HostNetwork    bool                `json:"host_network"`
 }
 
 type PowerPayload struct {
@@ -500,6 +633,9 @@ func handleConsoleManagement(w http.ResponseWriter, r *http.Request) {
 func handleSystem(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !verifyToken(w, r) {
 		return
 	}
 
@@ -644,6 +780,24 @@ func handleSystemImages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if data, ok := imageListCache.get(); ok {
+		json.NewEncoder(w).Encode(data)
+		return
+	}
+	for {
+		shouldFetch, done := imageListCache.beginRefresh()
+		if shouldFetch {
+			break
+		}
+		if done != nil {
+			<-done
+		}
+		if data, ok := imageListCache.get(); ok {
+			json.NewEncoder(w).Encode(data)
+			return
+		}
+	}
+	defer imageListCache.finishRefresh()
 	cli, err := getDockerClient()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -669,6 +823,8 @@ func handleSystemImages(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	imageListCache.set(result)
+	imageListCache.finishRefresh()
 	json.NewEncoder(w).Encode(result)
 }
 
@@ -699,6 +855,7 @@ func handleSystemImageDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to remove image: %v", err), http.StatusInternalServerError)
 		return
 	}
+	imageListCache.invalidate()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -720,13 +877,6 @@ func handleDockerBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cli, err := getDockerClient()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-
-	// Write Dockerfile to temp dir and build
 	buildDir, err := os.MkdirTemp("", "wings-build-*")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -746,26 +896,32 @@ func handleDockerBuild(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer os.RemoveAll(buildDir)
 		ctx := context.Background()
-		tarReader, err := createTarContext(buildDir)
-		if err != nil {
-			log.Printf("[BUILD] Failed to create tar: %v", err)
-			return
-		}
-		defer tarReader.Close()
 
-		buildOpts := types.ImageBuildOptions{
-			Tags:       []string{payload.ImageName},
-			Remove:     true,
-			ForceRemove: true,
-		}
-		resp, err := cli.ImageBuild(ctx, tarReader, buildOpts)
+		err := dockerCall(func(cli *client.Client) error {
+			tarReader, err := createTarContext(buildDir)
+			if err != nil {
+				return err
+			}
+			defer tarReader.Close()
+
+			buildOpts := types.ImageBuildOptions{
+				Tags:        []string{payload.ImageName},
+				Remove:      true,
+				ForceRemove: true,
+			}
+			resp, err := cli.ImageBuild(ctx, tarReader, buildOpts)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			io.Copy(io.Discard, resp.Body)
+			return nil
+		})
 		if err != nil {
 			log.Printf("[BUILD] Failed to build image %s: %v", payload.ImageName, err)
 			return
 		}
-		defer resp.Body.Close()
-		// Consume output so the build completes
-		io.Copy(io.Discard, resp.Body)
+		imageListCache.invalidate()
 		log.Printf("[BUILD] Image %s built successfully.", payload.ImageName)
 	}()
 }
@@ -859,6 +1015,13 @@ func createAndStartServer(cli *client.Client, payload ServerInstallPayload) {
 			break
 		}
 		log.Printf("[%s] Pull failed (attempt %d/3): %v. Retrying...", payload.UUID, i+1, pullErr)
+		if isVersionError(pullErr) {
+			log.Printf("[%s] API version mismatch during pull; switching to negotiation client.", payload.UUID)
+			forceNegotiationClient()
+			if cli2, err := getDockerClient(); err == nil {
+				cli = cli2
+			}
+		}
 		time.Sleep(2 * time.Second)
 	}
 	if pullErr != nil {
@@ -866,6 +1029,7 @@ func createAndStartServer(cli *client.Client, payload ServerInstallPayload) {
 		return
 	}
 	log.Printf("[%s] Image pulled successfully.", payload.UUID)
+	imageListCache.invalidate()
 
 	// 2. Setup server folders
 	serverRoot, err := filepath.Abs(filepath.Join(ServersDir, payload.UUID))
@@ -916,50 +1080,64 @@ func createAndStartServer(cli *client.Client, payload ServerInstallPayload) {
 	// 6. Create container — let the image's own entrypoint handle everything.
 	// Game server images (itzg, etc.) read STARTUP/MEMORY/EULA env vars
 	// and handle jar download, setup, and execution themselves.
+	// User-supplied env (payload.Env) overrides these defaults, so the panel
+	// can run any game version via e.g. VERSION / TYPE / EULA.
+	containerEnv := map[string]string{
+		"SERVER_PORT": fmt.Sprintf("%d", payload.PrimaryPort),
+		"STARTUP":     payload.StartupCommand,
+		"EULA":        "TRUE",
+		"MEMORY":      "2G",
+	}
+	for k, v := range payload.Env {
+		containerEnv[k] = v
+	}
+	envList := make([]string, 0, len(containerEnv))
+	for k, v := range containerEnv {
+		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+	}
+
 	config := &container.Config{
 		Image:        payload.DockerImage,
-		User:          "root",
+		User:         "root",
 		ExposedPorts: exposedPorts,
-		Env: []string{
-			fmt.Sprintf("SERVER_PORT=%d", payload.PrimaryPort),
-			fmt.Sprintf("STARTUP=%s", payload.StartupCommand),
-			"EULA=TRUE",
-			"MEMORY=2G",
-		},
-		WorkingDir: "/data",
-		Tty:        false,
-		OpenStdin:  true,
+		Env:          envList,
+		WorkingDir:   "/data",
+		Tty:          false,
+		OpenStdin:    true,
 	}
-	resp, err := cli.ContainerCreate(ctx, config,
-		&container.HostConfig{
-			PortBindings: portBindings,
-			Binds:        volumeBinds,
-			Resources: container.Resources{
-				NanoCPUs:   nanoCPUs,
-				Memory:     memLimitBytes,
-				MemorySwap: memLimitBytes,
-			},
-			NetworkMode: container.NetworkMode(func() string {
-				if useHostNetwork {
-					return "host"
-				}
-				if payload.DockerNetwork != "" {
-					return payload.DockerNetwork
-				}
-				return DockerNetwork
-			}()),
-			RestartPolicy: container.RestartPolicy{
-				Name: "no",
-			},
+	hostConfig := &container.HostConfig{
+		PortBindings: portBindings,
+		Binds:        volumeBinds,
+		Resources: container.Resources{
+			NanoCPUs:   nanoCPUs,
+			Memory:     memLimitBytes,
+			MemorySwap: memLimitBytes,
 		},
-		&network.NetworkingConfig{},
-		nil,
-		containerName,
-	)
+		NetworkMode: container.NetworkMode(func() string {
+			if useHostNetwork {
+				return "host"
+			}
+			if payload.DockerNetwork != "" {
+				return payload.DockerNetwork
+			}
+			return DockerNetwork
+		}()),
+		RestartPolicy: container.RestartPolicy{
+			Name: "no",
+		},
+	}
+
+	var resp container.ContainerCreateCreatedBody
+	err = dockerCall(func(cli *client.Client) error {
+		var e error
+		resp, e = cli.ContainerCreate(ctx, config, hostConfig, &network.NetworkingConfig{}, nil, containerName)
+		return e
+	})
 	if err != nil {
 		log.Printf("[%s] Failed to create container: %v", payload.UUID, err)
 		return
 	}
+	cli, _ = getDockerClient()
 
 	// 7. Auto-start
 	if startErr := cli.ContainerStart(ctx, containerName, types.ContainerStartOptions{}); startErr != nil {
@@ -1013,16 +1191,18 @@ func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 			inspect, err := cli.ContainerInspect(ctx, containerName)
 			if err != nil {
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"exists":  false,
-					"status":  "missing",
-					"message": "Container not found",
+					"exists":     false,
+					"status":     "missing",
+					"installing": installInFlight(uuid),
+					"message":    "Container not found",
 				})
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"exists":  true,
-				"status":  inspect.State.Status,
-				"running": inspect.State.Running,
+				"exists":     true,
+				"status":     inspect.State.Status,
+				"running":    inspect.State.Running,
+				"installing": installInFlight(uuid),
 			})
 			return
 		}
@@ -1037,9 +1217,19 @@ func handleServerSpecific(w http.ResponseWriter, r *http.Request) {
 			action := strings.ToLower(body.Action)
 			switch action {
 			case "start":
+				// Idempotent: starting an already-running container is a no-op success.
+				if inspect, ierr := cli.ContainerInspect(ctx, containerName); ierr == nil && inspect.State.Running {
+					json.NewEncoder(w).Encode(map[string]string{"status": "success", "action": action, "note": "already running"})
+					return
+				}
 				err = cli.ContainerStart(ctx, containerName, types.ContainerStartOptions{})
 			case "stop":
 				dur := 5 * time.Second
+				// Idempotent: stopping an already-stopped container is a no-op success.
+				if inspect, ierr := cli.ContainerInspect(ctx, containerName); ierr == nil && !inspect.State.Running {
+					json.NewEncoder(w).Encode(map[string]string{"status": "success", "action": action, "note": "already stopped"})
+					return
+				}
 				err = cli.ContainerStop(ctx, containerName, &dur)
 			case "kill":
 				err = cli.ContainerKill(ctx, containerName, "SIGKILL")

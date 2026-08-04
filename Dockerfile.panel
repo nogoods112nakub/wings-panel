@@ -19,5 +19,5 @@ COPY . .
 # Expose FastAPI Panel port
 EXPOSE 8000
 
-# Start Panel Application
-CMD ["uvicorn", "panel.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start Panel Application (4 workers for concurrent user load)
+CMD ["uvicorn", "panel.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

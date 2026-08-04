@@ -1,13 +1,24 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Dict
 from datetime import datetime
+import re
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # --- Auth Schemas ---
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=255)
-    email: str = Field(..., min_length=5)
+    email: str = Field(..., min_length=5, max_length=255)
     password: str = Field(..., min_length=8)
     root_admin: Optional[bool] = None
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not EMAIL_RE.match(v):
+            raise ValueError("Invalid email address")
+        return v
 
 class UserLogin(BaseModel):
     username: str
@@ -91,6 +102,7 @@ class ServerBase(BaseModel):
     docker_image: str = "itzg/minecraft-server"
     docker_network: str = "pterodactyl-net"
     startup_command: str = ""
+    env_vars: Optional[Dict[str, str]] = None
 
 class ServerCreate(ServerBase):
     node_id: int

@@ -10,7 +10,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from typing import List, Optional
 from jose import jwt, JWTError
 from passlib.hash import bcrypt
@@ -292,6 +292,12 @@ def check_server_access(user: models.User, srv: models.Server, perm: Optional[st
         raise HTTPException(status_code=403, detail=f"Missing permission: {perm}")
 
 
+def require_owner_or_root(user: models.User, srv: models.Server):
+    if user.root_admin or srv.owner_id == user.id:
+        return
+    raise HTTPException(status_code=403, detail="Only the server owner can perform this action")
+
+
 # --- System Endpoints ---
 @app.get("/api/system/status", response_model=schemas.SystemStatusResponse)
 async def system_status(db: Session = Depends(get_db), user: models.User = Depends(require_admin)):
@@ -399,7 +405,9 @@ async def build_docker_image(body: dict, db: Session = Depends(get_db), user: mo
 
 # --- Auth Endpoints ---
 @app.post("/api/auth/register", response_model=schemas.TokenResponse, status_code=201)
-def register(body: schemas.UserCreate, db: Session = Depends(get_db)):
+def register(body: schemas.UserCreate, request: Request, db: Session = Depends(get_db)):
+    ip = request.client.host if request.client else "unknown"
+    _check_login_throttle(db, body.username, ip)
     reg_setting = db.query(models.PanelSetting).filter(models.PanelSetting.key == "registration_enabled").first()
     if reg_setting and reg_setting.value == "false":
         raise HTTPException(status_code=403, detail="Registration is disabled by the administrator")
@@ -420,11 +428,54 @@ def register(body: schemas.UserCreate, db: Session = Depends(get_db)):
     return schemas.TokenResponse(token=token, user=schemas.UserResponse.model_validate(user))
 
 
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 600
+
+
+def _login_attempt_count(db: Session, username: str, ip: str) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
+    username_count = db.query(func.count(models.LoginAttempt.id)).filter(
+        models.LoginAttempt.username == username,
+        models.LoginAttempt.created_at >= cutoff,
+    ).scalar()
+    ip_count = db.query(func.count(models.LoginAttempt.id)).filter(
+        models.LoginAttempt.ip_address == ip,
+        models.LoginAttempt.created_at >= cutoff,
+    ).scalar()
+    return max(username_count, ip_count)
+
+
+def _check_login_throttle(db: Session, username: str, ip: str) -> None:
+    if _login_attempt_count(db, username, ip) >= LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Please wait 10 minutes.",
+        )
+
+
+def _record_login_failure(db: Session, username: str, ip: str) -> None:
+    db.add(models.LoginAttempt(username=username, ip_address=ip))
+    db.commit()
+
+
+def _clear_login_throttle(db: Session, username: str, ip: str) -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
+    db.query(models.LoginAttempt).filter(
+        or_(models.LoginAttempt.username == username, models.LoginAttempt.ip_address == ip),
+        models.LoginAttempt.created_at >= cutoff,
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
 @app.post("/api/auth/login", response_model=schemas.TokenResponse)
-def login(body: schemas.UserLogin, db: Session = Depends(get_db)):
+def login(body: schemas.UserLogin, request: Request, db: Session = Depends(get_db)):
+    ip = request.client.host if request.client else "unknown"
+    _check_login_throttle(db, body.username, ip)
     user = db.query(models.User).filter(models.User.username == body.username).first()
     if not user or not bcrypt.verify(body.password, user.password_hash):
+        _record_login_failure(db, body.username, ip)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    _clear_login_throttle(db, body.username, ip)
     log_activity(db, user_id=user.id, action="user.login", detail=f"User {user.username} logged in")
     token = create_token(user.id, user.username)
     return schemas.TokenResponse(token=token, user=schemas.UserResponse.model_validate(user))
@@ -615,11 +666,19 @@ async def call_daemon(node: models.Node, path: str, method: str = "GET", json_da
             else:
                 response = await client.get(url, headers=headers)
             if response.status_code >= 400:
+                detail = f"Daemon error: {response.text}"
+                if response.status_code in (404, 405):
+                    detail += " (this daemon version may not support the feature)"
                 raise HTTPException(
                     status_code=response.status_code,
-                    detail=f"Daemon error: {response.text}"
+                    detail=detail
                 )
-            return response.json() if response.content else {}
+            if not response.content:
+                return {}
+            try:
+                return response.json()
+            except Exception:
+                return {"raw": response.text}
         except httpx.RequestError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -670,6 +729,7 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
         docker_image=docker_image,
         docker_network=server.docker_network,
         startup_command=startup_command,
+        env_vars=server.env_vars or {},
         status="installing"
     )
     db.add(new_server)
@@ -680,6 +740,8 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
         all_allocs.append(primary_alloc)
 
     for alloc_id in (server.allocation_ids or []):
+        if primary_alloc is not None and alloc_id == primary_alloc.id:
+            continue
         alloc = db.query(models.Allocation).filter(
             models.Allocation.id == alloc_id,
             models.Allocation.node_id == server.node_id
@@ -708,6 +770,7 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
         "primary_port": primary_port,
         "allocations": [{"ip_address": a.ip_address, "port": a.port} for a in all_allocs],
         "startup_command": new_server.startup_command or "",
+        "env": new_server.env_vars or {},
         "host_network": use_host_network,
     }
 
@@ -728,7 +791,7 @@ async def create_server(server: schemas.ServerCreate, db: Session = Depends(get_
 
 async def _poll_install_complete(server_id: int, node_id: int):
     from panel.database import SessionLocal
-    for i in range(60):
+    for i in range(90):
         await asyncio.sleep(3)
         db = SessionLocal()
         try:
@@ -741,6 +804,9 @@ async def _poll_install_complete(server_id: int, node_id: int):
             try:
                 install = await call_daemon(node, f"/api/servers/{srv.uuid}/install-status")
                 exists = install.get("exists", False)
+                if install.get("installing", False):
+                    # Install still in progress (e.g. slow image pull); keep waiting.
+                    continue
                 if not exists:
                     if i > 5:
                         srv.status = "install_failed"
@@ -775,38 +841,87 @@ async def _poll_install_complete(server_id: int, node_id: int):
         if srv:
             srv.installed = True
             if srv.status == "installing":
-                srv.status = "stopped"
+                srv.status = "install_failed"
+                print(f"[POLL] Server {server_id} install poll timed out — marked install_failed")
+            else:
+                print(f"[POLL] Server {server_id} install poll timed out — marked installed")
             db.commit()
-            print(f"[POLL] Server {server_id} install poll timed out — marked installed")
     finally:
         db.close()
 
 
+def _acquire_loop_lock(name: str):
+    from panel.database import DATABASE_URL, engine
+    if DATABASE_URL.startswith("postgres"):
+        from sqlalchemy import text
+        conn = engine.connect()
+        try:
+            row = conn.execute(text("SELECT pg_try_advisory_lock(hashtext(:n))"), {"n": name}).fetchone()
+            if row and row[0]:
+                return ("pg", conn)
+        except Exception:
+            pass
+        conn.close()
+        return None
+    import fcntl, os
+    fd = os.open(f"/tmp/wings_loop_{name}.lock", os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return ("file", fd)
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def _release_loop_lock(lock):
+    if not lock:
+        return
+    kind, handle = lock
+    if kind == "pg":
+        handle.close()
+    else:
+        import fcntl, os
+        try:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            os.close(handle)
+
+
 async def _sync_all_server_statuses():
     from panel.database import SessionLocal
-    while True:
-        await asyncio.sleep(10)
-        db = SessionLocal()
-        try:
-            servers = db.query(models.Server).filter(models.Server.installed == True).all()
-            for srv in servers:
-                if srv.status == "suspended":
-                    continue
-                node = srv.node
-                if not node:
-                    continue
-                try:
-                    stats = await call_daemon(node, f"/api/servers/{srv.uuid}/resources")
-                    daemon_status = stats.get("status", "")
-                    status_map = {"running": "running", "exited": "stopped", "dead": "stopped", "created": "stopped"}
-                    new_status = status_map.get(daemon_status)
-                    if new_status and srv.status != new_status:
-                        srv.status = new_status
-                        db.commit()
-                except Exception:
-                    pass
-        finally:
-            db.close()
+    lock = _acquire_loop_lock("status_sync")
+    if lock is None:
+        while True:
+            await asyncio.sleep(60)
+            lock = _acquire_loop_lock("status_sync")
+            if lock is not None:
+                break
+    try:
+        while True:
+            await asyncio.sleep(10)
+            db = SessionLocal()
+            try:
+                servers = db.query(models.Server).filter(models.Server.installed == True).all()
+                for srv in servers:
+                    if srv.status == "suspended":
+                        continue
+                    node = srv.node
+                    if not node:
+                        continue
+                    try:
+                        stats = await call_daemon(node, f"/api/servers/{srv.uuid}/resources")
+                        daemon_status = stats.get("status", "")
+                        status_map = {"running": "running", "exited": "stopped", "dead": "stopped", "created": "stopped"}
+                        new_status = status_map.get(daemon_status)
+                        if new_status and srv.status != new_status:
+                            srv.status = new_status
+                            db.commit()
+                    except Exception:
+                        pass
+            finally:
+                db.close()
+    finally:
+        _release_loop_lock(lock)
 
 
 # --- Schedule Executor ---
@@ -900,38 +1015,48 @@ def _next_cron(dt, cron):
 
 async def _run_due_schedules():
     from panel.database import SessionLocal
-    while True:
-        await asyncio.sleep(30)
-        db = SessionLocal()
-        try:
-            now = datetime.now(timezone.utc)
-            schedules = db.query(models.ServerSchedule).filter(models.ServerSchedule.is_active == True).all()
-            for sched in schedules:
-                srv = sched.server
-                node = srv.node if srv else None
-                if not srv or not node:
-                    continue
-                if sched.recurring and sched.recurring_pattern:
-                    cron = _parse_cron(sched.recurring_pattern)
-                    if not cron:
+    lock = _acquire_loop_lock("schedules")
+    if lock is None:
+        while True:
+            await asyncio.sleep(60)
+            lock = _acquire_loop_lock("schedules")
+            if lock is not None:
+                break
+    try:
+        while True:
+            await asyncio.sleep(30)
+            db = SessionLocal()
+            try:
+                now = datetime.now(timezone.utc)
+                schedules = db.query(models.ServerSchedule).filter(models.ServerSchedule.is_active == True).all()
+                for sched in schedules:
+                    srv = sched.server
+                    node = srv.node if srv else None
+                    if not srv or not node:
                         continue
-                    if sched.scheduled_time is None:
-                        sched.scheduled_time = _next_cron(now, cron)
-                        db.commit()
-                        continue
-                    st = sched.scheduled_time
-                    if st.tzinfo is None:
-                        st = st.replace(tzinfo=timezone.utc)
-                    if now >= st and (now - st) <= timedelta(minutes=5):
-                        await _fire_schedule(db, sched, srv, node, now)
-                elif sched.scheduled_time is not None:
-                    st = sched.scheduled_time
-                    if st.tzinfo is None:
-                        st = st.replace(tzinfo=timezone.utc)
-                    if now >= st and (now - st) <= timedelta(seconds=120):
-                        await _fire_schedule(db, sched, srv, node, now)
-        finally:
-            db.close()
+                    if sched.recurring and sched.recurring_pattern:
+                        cron = _parse_cron(sched.recurring_pattern)
+                        if not cron:
+                            continue
+                        if sched.scheduled_time is None:
+                            sched.scheduled_time = _next_cron(now, cron)
+                            db.commit()
+                            continue
+                        st = sched.scheduled_time
+                        if st.tzinfo is None:
+                            st = st.replace(tzinfo=timezone.utc)
+                        if now >= st and (now - st) <= timedelta(minutes=5):
+                            await _fire_schedule(db, sched, srv, node, now)
+                    elif sched.scheduled_time is not None:
+                        st = sched.scheduled_time
+                        if st.tzinfo is None:
+                            st = st.replace(tzinfo=timezone.utc)
+                        if now >= st and (now - st) <= timedelta(seconds=120):
+                            await _fire_schedule(db, sched, srv, node, now)
+            finally:
+                db.close()
+    finally:
+        _release_loop_lock(lock)
 
 
 async def _fire_schedule(db, sched, srv, node, now):
@@ -1125,8 +1250,10 @@ def remove_server_member(server_id: int, member_id: int, db: Session = Depends(g
 @app.patch("/api/servers/{server_id}", response_model=schemas.ServerResponse)
 def update_server(server_id: int, body: schemas.ServerUpdate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
+    require_owner_or_root(user, srv)
     for key, val in body.model_dump(exclude_unset=True).items():
+        if key == "status" and not user.root_admin:
+            continue
         setattr(srv, key, val)
     db.commit()
     db.refresh(srv)
@@ -1152,17 +1279,6 @@ async def send_power_action(server_id: int, action: str, db: Session = Depends(g
 
     log_activity(db, user_id=user.id, server_id=srv.id, action=f"server.power.{action}", detail=f"Server '{srv.name}' {action} action dispatched")
     _fire_webhooks(f"server.power.{action}", {"server_id": srv.id, "name": srv.name, "uuid": srv.uuid})
-
-    await asyncio.sleep(3)
-    try:
-        stats = await call_daemon(node, f"/api/servers/{srv.uuid}/resources")
-        daemon_status = stats.get("status", "")
-        real_map = {"running": "running", "exited": "stopped", "dead": "stopped"}
-        if daemon_status in real_map:
-            srv.status = real_map[daemon_status]
-            db.commit()
-    except Exception:
-        pass
 
     return {"message": f"Power action '{action}' dispatched", "daemon_response": response}
 
@@ -1262,6 +1378,7 @@ async def reinstall_server(server_id: int, db: Session = Depends(get_db), user: 
         "primary_port": 0,
         "allocations": [],
         "startup_command": srv.startup_command or "",
+        "env": srv.env_vars or {},
         "host_network": True,
     }
 
@@ -1464,7 +1581,7 @@ async def list_server_backups(server_id: int, db: Session = Depends(get_db), use
 @app.post("/api/servers/{server_id}/backups")
 async def create_server_backup(server_id: int, body: dict, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
+    require_owner_or_root(user, srv)
     backup_id = body.get("backup_id") or str(uuid.uuid4())
     resp = await call_daemon(srv.node, f"/api/servers/{srv.uuid}/backups", method="POST",
                              json_data={"backup_id": backup_id, "name": body.get("name", "")})
@@ -1474,7 +1591,7 @@ async def create_server_backup(server_id: int, body: dict, db: Session = Depends
 @app.delete("/api/servers/{server_id}/backups/{backup_id}", status_code=204)
 async def delete_server_backup(server_id: int, backup_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
+    require_owner_or_root(user, srv)
     await call_daemon(srv.node, f"/api/servers/{srv.uuid}/backups/{backup_id}", method="DELETE")
     return Response(status_code=204)
 
@@ -1482,7 +1599,7 @@ async def delete_server_backup(server_id: int, backup_id: str, db: Session = Dep
 @app.post("/api/servers/{server_id}/backups/{backup_id}/restore")
 async def restore_server_backup(server_id: int, backup_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
+    require_owner_or_root(user, srv)
     return await call_daemon(srv.node, f"/api/servers/{srv.uuid}/backups/{backup_id}/restore", method="POST")
 
 
@@ -1622,12 +1739,15 @@ def list_activity(
     logs = query.order_by(models.ActivityLog.created_at.desc()).offset(offset).limit(limit).all()
 
     result = []
+    user_ids = {log_entry.user_id for log_entry in logs if log_entry.user_id}
+    users = {}
+    if user_ids:
+        for u in db.query(models.User).filter(models.User.id.in_(user_ids)).all():
+            users[u.id] = u.username
     for log_entry in logs:
         resp = schemas.ActivityLogResponse.model_validate(log_entry)
-        if log_entry.user_id:
-            u = db.query(models.User).filter(models.User.id == log_entry.user_id).first()
-            if u:
-                resp.username = u.username
+        if log_entry.user_id and log_entry.user_id in users:
+            resp.username = users[log_entry.user_id]
         result.append(resp)
     return result
 
@@ -1648,12 +1768,15 @@ def list_server_activity(
     ).order_by(models.ActivityLog.created_at.desc()).offset(offset).limit(limit).all()
 
     result = []
+    user_ids = {log_entry.user_id for log_entry in logs if log_entry.user_id}
+    users = {}
+    if user_ids:
+        for u in db.query(models.User).filter(models.User.id.in_(user_ids)).all():
+            users[u.id] = u.username
     for log_entry in logs:
         resp = schemas.ActivityLogResponse.model_validate(log_entry)
-        if log_entry.user_id:
-            u = db.query(models.User).filter(models.User.id == log_entry.user_id).first()
-            if u:
-                resp.username = u.username
+        if log_entry.user_id and log_entry.user_id in users:
+            resp.username = users[log_entry.user_id]
         result.append(resp)
     return result
 
@@ -1780,6 +1903,7 @@ async def clone_server(server_id: int, db: Session = Depends(get_db), user: mode
         docker_network=srv.docker_network,
         startup_command=srv.startup_command or "",
         group_id=srv.group_id,
+        env_vars=srv.env_vars or {},
         status="installing",
     )
     db.add(new_server)
@@ -1827,7 +1951,7 @@ async def delete_docker_network(network_name: str, db: Session = Depends(get_db)
 @app.get("/api/servers/{server_id}/schedules", response_model=List[schemas.ServerScheduleResponse])
 def list_server_schedules(server_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     srv = get_server_or_404(server_id, db)
-    check_server_access(user, srv)
+    check_server_access(user, srv, perm="schedules")
     return db.query(models.ServerSchedule).filter(models.ServerSchedule.server_id == server_id).order_by(models.ServerSchedule.scheduled_time).all()
 
 

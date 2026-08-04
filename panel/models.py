@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Float, Text, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Float, Text, Boolean, JSON
 from sqlalchemy.orm import relationship, declarative_base
 import datetime
 import uuid as uuid_module
@@ -52,7 +52,7 @@ class Allocation(Base):
     node_id = Column(Integer, ForeignKey('nodes.id', ondelete='CASCADE'), nullable=False)
     ip_address = Column(String(45), nullable=False)
     port = Column(Integer, nullable=False)
-    server_id = Column(Integer, ForeignKey('servers.id', ondelete='SET NULL'), nullable=True)
+    server_id = Column(Integer, ForeignKey('servers.id', ondelete='SET NULL'), nullable=True, index=True)
 
     node = relationship("Node", back_populates="allocations")
     server = relationship("Server", back_populates="allocations", foreign_keys=[server_id])
@@ -68,8 +68,8 @@ class Server(Base):
     uuid = Column(String(36), default=lambda: str(uuid_module.uuid4()), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    owner_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    node_id = Column(Integer, ForeignKey('nodes.id', ondelete='RESTRICT'), nullable=False)
+    owner_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    node_id = Column(Integer, ForeignKey('nodes.id', ondelete='RESTRICT'), nullable=False, index=True)
     primary_allocation_id = Column(Integer, ForeignKey('allocations.id', ondelete='RESTRICT'), nullable=True)
     group_id = Column(Integer, ForeignKey('server_groups.id', ondelete='SET NULL'), nullable=True)
 
@@ -79,6 +79,7 @@ class Server(Base):
     docker_image = Column(String(255), nullable=False, default="itzg/minecraft-server")
     docker_network = Column(String(255), nullable=False, default="pterodactyl-net")
     startup_command = Column(Text, nullable=True, default="")
+    env_vars = Column(JSON, nullable=True)
     status = Column(String(50), nullable=False, default="installing")
     installed = Column(Boolean, default=False)
 
@@ -101,8 +102,8 @@ class ActivityLog(Base):
     __tablename__ = 'activity_logs'
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=True)
-    server_id = Column(Integer, nullable=True)
+    user_id = Column(Integer, nullable=True, index=True)
+    server_id = Column(Integer, nullable=True, index=True)
     action = Column(String(255), nullable=False)
     detail = Column(Text, nullable=True)
     ip_address = Column(String(45), nullable=True)
@@ -113,6 +114,15 @@ class ActivityLog(Base):
 
     def __repr__(self):
         return f"<ActivityLog action={self.action} user_id={self.user_id} server_id={self.server_id}>"
+
+
+class LoginAttempt(Base):
+    __tablename__ = 'login_attempts'
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(255), nullable=True, index=True)
+    ip_address = Column(String(45), nullable=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), index=True)
 
 
 class ServerGroup(Base):
@@ -134,7 +144,7 @@ class ServerSchedule(Base):
     __tablename__ = 'server_schedules'
 
     id = Column(Integer, primary_key=True, index=True)
-    server_id = Column(Integer, ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    server_id = Column(Integer, ForeignKey('servers.id', ondelete='CASCADE'), nullable=False, index=True)
     action = Column(String(20), nullable=False)
     scheduled_time = Column(DateTime, nullable=False)
     recurring = Column(Boolean, default=False)
@@ -152,8 +162,8 @@ class ServerMember(Base):
     __tablename__ = 'server_members'
 
     id = Column(Integer, primary_key=True, index=True)
-    server_id = Column(Integer, ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
-    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    server_id = Column(Integer, ForeignKey('servers.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     permissions = Column(Text, nullable=False, default="console,power,files,schedules,logs")
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
@@ -174,7 +184,7 @@ class ApiKey(Base):
     __tablename__ = 'api_keys'
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     key_hash = Column(String(255), nullable=False, unique=True, index=True)
     permissions = Column(Text, nullable=True, default="")

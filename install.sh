@@ -7,9 +7,11 @@ cd "$INSTALL_DIR"
 SCRIPT_ARGS=("$@")
 
 AUTO_YES=""
+SKIP_WAIT="${SKIP_WAIT:-}"
 for _arg in "$@"; do
     case "$_arg" in
         -y|--yes) AUTO_YES="yes" ;;
+        -s|--skip-wait|--no-wait) SKIP_WAIT="yes" ;;
     esac
 done
 
@@ -369,6 +371,12 @@ uninstall() {
 
 wait_for_services() {
     local mode="${1:-all}"
+
+    if [ -n "$SKIP_WAIT" ]; then
+        info "Skipping readiness wait (--skip-wait / SKIP_WAIT set)."
+        return
+    fi
+
     local panel_ready=false
     local daemon_ready=false
     local max_attempts=90
@@ -504,16 +512,18 @@ usage() {
     echo "  help       Show this help"
     echo ""
     echo "Env vars: WINGS_PANEL_REPO (default: $REPO_URL), WINGS_PANEL_BRANCH (default: $REPO_BRANCH)"
+    echo "Flags: -y/--yes (no prompts), -s/--skip-wait (skip the readiness wait)"
+    echo "       Env: SKIP_WAIT=1 also skips the readiness wait"
     echo ""
     echo "With no command: the first run downloads Wings Panel from GitHub and installs it."
-    echo "Later runs only update the existing stack (no re-download, no menu)."
-    echo "Use '$0 menu' if you want the interactive menu."
+    echo "Later runs show the management menu (reinstall / update / uninstall / logs)."
+    echo "Use '$0 menu' at any time to show that menu."
     exit 0
 }
 
 # auto is the default action when no command is given.
 # First run (no docker-compose.yml yet): download from GitHub, then install.
-# Later runs: never re-download, just update the existing stack. No menu.
+# Later runs: show the management menu (update / uninstall / reinstall / logs).
 auto() {
     if [ ! -f "$INSTALL_DIR/docker-compose.yml" ]; then
         info "No existing installation found. Downloading Wings Panel from GitHub..."
@@ -522,30 +532,32 @@ auto() {
         exec bash "$INSTALL_DIR/wings-panel/install.sh" "${SCRIPT_ARGS[@]}"
     fi
 
+    info "Existing installation detected."
     if $COMPOSE ps --format '{{.Name}}' 2>/dev/null | grep -q .; then
-        info "Installation already present. Running update (no GitHub re-download)..."
-        update
+        info "Services are running."
     else
-        info "Code present but nothing running. Installing..."
-        install_full
+        info "Services are stopped."
     fi
-    wait_for_services all
-    show_logs
-    summary
+    menu
 }
 
 menu() {
+    if [ ! -t 0 ]; then
+        warn "The interactive menu needs a terminal. Use a command instead: update, uninstall, panel, daemon, install, help"
+        usage
+    fi
     while true; do
         echo ""
         echo -e "${CYAN}  ┌──────────────────────────────────────────┐${NC}"
-        echo -e "${CYAN}  │            Select an option              │${NC}"
+        echo -e "${CYAN}  │     Manage Wings Panel Installation     │${NC}"
         echo -e "${CYAN}  ├──────────────────────────────────────────┤${NC}"
-        echo -e "${CYAN}  │  ${NC}1) Install (everything)                    ${CYAN}│${NC}"
+        echo -e "${CYAN}  │  ${NC}1) Reinstall (pull + rebuild all)             ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}2) Install Panel only                     ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}3) Install Daemon only                    ${CYAN}│${NC}"
-        echo -e "${CYAN}  │  ${NC}4) Update                                ${CYAN}│${NC}"
+        echo -e "${CYAN}  │  ${NC}4) Update images & restart                ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}5) Download from GitHub                  ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}6) Uninstall                             ${CYAN}│${NC}"
+        echo -e "${CYAN}  │  ${NC}7) Show service logs                      ${CYAN}│${NC}"
         echo -e "${CYAN}  │  ${NC}0) Exit                                 ${CYAN}│${NC}"
         echo -e "${CYAN}  └──────────────────────────────────────────┘${NC}"
         read -rp "  Choice: " choice
@@ -557,6 +569,7 @@ menu() {
             4) update; summary ;;
             5) download_repo; info "Next: run  ./wings-panel/install.sh  (or re-run this installer from that folder)" ;;
             6) uninstall ;;
+            7) show_logs ;;
             0) info "Goodbye."; exit 0 ;;
             *) warn "Invalid choice: $choice" ;;
         esac
@@ -570,7 +583,17 @@ preflight
 setup_env
 create_network
 
-case "${1:-auto}" in
+_CMD="auto"
+for _arg in "${SCRIPT_ARGS[@]}"; do
+    case "$_arg" in
+        -y|--yes|-s|--skip-wait|--no-wait) continue ;;
+        -*) continue ;;
+    esac
+    _CMD="$_arg"
+    break
+done
+
+case "$_CMD" in
     install)   fetch_latest; stop_all; install_full; wait_for_services all; show_logs; summary ;;
     panel)     install_panel; wait_for_services panel; summary ;;
     daemon)    install_daemon; wait_for_services daemon ;;
