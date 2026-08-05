@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
@@ -26,6 +27,8 @@ DAEMON_HOST = os.getenv("DAEMON_HOST", "daemon-node")
 DAEMON_PORT = int(os.getenv("DAEMON_PORT", "8080"))
 SERVER_MEMORY_MB = int(os.getenv("SERVER_MEMORY_MB", "16384"))
 SERVER_CPU_COUNT = int(os.getenv("SERVER_CPU_COUNT", "4"))
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin12345")
 
 PRECONFIGURED_ALLOCATIONS = [
     (25565, 10, "Minecraft Java"),
@@ -53,11 +56,32 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()]
+ALLOWED_ORIGIN_REGEX = os.getenv(
+    "ALLOWED_ORIGIN_REGEX",
+    r"https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?",
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Content-Security-Policy", "default-src 'none'")
+        response.headers["Server"] = "Wings"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=FRONTEND_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -70,6 +94,13 @@ def run_startup_config() -> bool:
         node = create_default_node(db)
         if node:
             create_default_allocations(db, node)
+            synced = 0
+            for existing in db.query(models.Node).filter(models.Node.daemon_token != DAEMON_TOKEN).all():
+                existing.daemon_token = DAEMON_TOKEN
+                synced += 1
+            if synced:
+                db.commit()
+                print(f"[PANEL] Synced {synced} node(s) to the current DAEMON_TOKEN from environment")
         return fresh
     finally:
         db.close()
@@ -81,14 +112,17 @@ def create_default_admin(db: Session) -> bool:
         admin = models.User(
             username="admin",
             email="admin@panel.local",
-            password_hash=bcrypt.hash("admin12345"),
+            password_hash=bcrypt.hash(ADMIN_PASSWORD),
             root_admin=True
         )
         db.add(admin)
         db.commit()
-        print("[PANEL] Default admin created — admin / admin12345")
+        print(f"[PANEL] Default admin created — admin / {ADMIN_PASSWORD}")
+        print(f"[PANEL] SECURITY: keep this password safe (it is in your .env file).")
         return True
     else:
+        if os.getenv("ADMIN_PASSWORD", "admin12345") == "admin12345":
+            print("[PANEL] WARNING: admin is still using the default password admin/admin12345 — change it soon!")
         print("[PANEL] Admin user exists, skipping")
         return False
 
@@ -409,7 +443,7 @@ def register(body: schemas.UserCreate, request: Request, db: Session = Depends(g
     ip = request.client.host if request.client else "unknown"
     _check_login_throttle(db, body.username, ip)
     reg_setting = db.query(models.PanelSetting).filter(models.PanelSetting.key == "registration_enabled").first()
-    if reg_setting and reg_setting.value == "false":
+    if reg_setting is None or reg_setting.value == "false":
         raise HTTPException(status_code=403, detail="Registration is disabled by the administrator")
     if db.query(models.User).filter(models.User.username == body.username).first():
         raise HTTPException(status_code=400, detail="Username already taken")
@@ -2372,7 +2406,7 @@ def get_panel_settings(db: Session = Depends(get_db), user: models.User = Depend
     return {
         "site_name": _get_setting(db, "site_name", "Wings Panel"),
         "maintenance_mode": _get_setting(db, "maintenance_mode", "false") == "true",
-        "registration_enabled": _get_setting(db, "registration_enabled", "true") == "true",
+        "registration_enabled": _get_setting(db, "registration_enabled", "false") == "true",
         "default_theme": _get_setting(db, "default_theme", "dark"),
     }
 

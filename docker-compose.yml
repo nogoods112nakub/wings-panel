@@ -6,7 +6,7 @@ services:
     command: ["postgres", "-c", "max_connections=250"]
     environment:
       POSTGRES_USER: panel_user
-      POSTGRES_PASSWORD: panel_password_secure_99
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-panel_password_secure_99}
       POSTGRES_DB: panel_db
     ports:
       - "5432:5432"
@@ -27,9 +27,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://panel_user:panel_password_secure_99@db:5432/panel_db
-      - JWT_SECRET=super-secret-pterodactyl-key-change-in-production
-      - DAEMON_TOKEN=secure_default_wings_api_key_123456
+      - DATABASE_URL=postgresql://panel_user:${POSTGRES_PASSWORD:-panel_password_secure_99}@db:5432/panel_db
+      - JWT_SECRET=${JWT_SECRET:-super-secret-pterodactyl-key-change-in-production}
+      - DAEMON_TOKEN=${DAEMON_TOKEN:-secure_default_wings_api_key_123456}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin12345}
       - DAEMON_HOST=daemon-node
       - DAEMON_PORT=8080
       - SERVER_MEMORY_MB=16384
@@ -43,13 +44,13 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
       args:
-        NEXT_PUBLIC_PANEL_URL: http://localhost:8000
+        NEXT_PUBLIC_PANEL_URL: ${PANEL_URL:-http://localhost:8000}
     container_name: panel-frontend
     restart: always
     ports:
       - "3001:3000"
     environment:
-      - NEXT_PUBLIC_PANEL_URL=http://localhost:8000
+      - NEXT_PUBLIC_PANEL_URL=${PANEL_URL:-http://localhost:8000}
     depends_on:
       - panel
 
@@ -63,7 +64,7 @@ services:
       - "8080:8080"
       - "7681-7781:7681-7781"
     environment:
-      - DAEMON_TOKEN=secure_default_wings_api_key_123456
+      - DAEMON_TOKEN=${DAEMON_TOKEN:-secure_default_wings_api_key_123456}
       - SERVERS_DIR=/srv/daemon/servers
       - HOST_SERVERS_DIR=/srv/daemon/servers
       - DOCKER_URL=unix:///var/run/docker.sock
