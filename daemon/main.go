@@ -1142,6 +1142,8 @@ func createAndStartServer(cli *client.Client, payload ServerInstallPayload) {
 	// 7. Auto-start
 	if startErr := cli.ContainerStart(ctx, containerName, types.ContainerStartOptions{}); startErr != nil {
 		log.Printf("[%s] Container created but failed to start: %v", payload.UUID, startErr)
+		// Don't leak a half-created container (e.g. port already in use).
+		cli.ContainerRemove(ctx, containerName, types.ContainerRemoveOptions{Force: true})
 		return
 	}
 	log.Printf("[%s] Container started successfully (ID: %s)", payload.UUID, resp.ID[:12])
@@ -2172,6 +2174,8 @@ func handleCloneServer(w http.ResponseWriter, r *http.Request, uuid string, cli 
 
 	if startErr := cli.ContainerStart(ctx, newContainerName, types.ContainerStartOptions{}); startErr != nil {
 		log.Printf("[CLONE] Container created but failed to start: %v", startErr)
+		// Don't leak a half-created clone (e.g. port already in use).
+		cli.ContainerRemove(ctx, newContainerName, types.ContainerRemoveOptions{Force: true})
 		http.Error(w, fmt.Sprintf("Failed to start cloned container: %v", startErr), http.StatusInternalServerError)
 		return
 	}

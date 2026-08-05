@@ -379,7 +379,13 @@ wait_for_services() {
 
     local panel_ready=false
     local daemon_ready=false
-    local max_attempts=90
+    local max_attempts=4
+    local panel_port="${PANEL_PORT:-8000}"
+    local daemon_port="${DAEMON_PORT:-8080}"
+    local daemon_token="${DAEMON_TOKEN:-}"
+    if [ -z "$daemon_token" ] && [ -f docker-compose.yml ]; then
+        daemon_token="$(grep -oE 'DAEMON_TOKEN=[^ ]+' docker-compose.yml | head -1 | cut -d= -f2)"
+    fi
 
     info "Waiting for services to become healthy..."
 
@@ -387,16 +393,16 @@ wait_for_services() {
 
     for i in $(seq 1 $max_attempts); do
         if [ "$mode" != "daemon" ] && ! $panel_ready; then
-            if curl -sf http://localhost:8000/docs >/dev/null 2>&1; then
+            if curl -sf http://localhost:$panel_port/docs >/dev/null 2>&1; then
                 panel_ready=true
-                ok "Panel API ready (port 8000)"
+                ok "Panel API ready (port $panel_port)"
             fi
         fi
 
         if [ "$mode" != "panel" ] && ! $daemon_ready; then
-            if curl -sf http://localhost:8080/api/system >/dev/null 2>&1; then
+            if [ -n "$daemon_token" ] && curl -sf http://localhost:$daemon_port/api/system -H "X-Daemon-Token: $daemon_token" >/dev/null 2>&1; then
                 daemon_ready=true
-                ok "Daemon API ready (port 8080)"
+                ok "Daemon API ready (port $daemon_port)"
             fi
         fi
 
@@ -407,7 +413,7 @@ wait_for_services() {
         fi
 
         if [ "$i" -eq "$max_attempts" ]; then
-            warn "Timed out waiting for services. Check logs with: $COMPOSE logs"
+            warn "Timed out waiting for services after ~${max_attempts}x3s. Continuing anyway — check logs later with: $COMPOSE logs"
             return
         fi
         sleep 3
@@ -476,6 +482,23 @@ summary() {
     echo -e "    $COMPOSE stop             Stop all services"
     echo -e "    $COMPOSE down -v          Stop and delete volumes"
     echo -e "    $COMPOSE restart          Restart all services"
+    echo ""
+
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${CYAN}  Daemon (Wings) Setup${NC}"
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${CYAN}Daemon API:${NC}     http://localhost:${daemon_port}"
+    local daemon_token=""
+    if [ -f docker-compose.yml ]; then
+        daemon_token="$(grep -oE 'DAEMON_TOKEN=[^ ]+' docker-compose.yml | head -1 | cut -d= -f2)"
+    fi
+    if [ -n "$daemon_token" ]; then
+        echo -e "  ${CYAN}Daemon Token:${NC}   $daemon_token"
+    fi
+    echo -e "  ${CYAN}Test daemon:${NC}    curl -s http://localhost:${daemon_port}/api/system -H \"X-Daemon-Token: <token>\""
+    echo ""
+    echo -e "  To register this node in the panel, create a Node in the"
+    echo -e "  panel UI using the daemon address above and the same token."
     echo ""
 
     echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

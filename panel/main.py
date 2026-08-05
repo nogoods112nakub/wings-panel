@@ -1863,31 +1863,43 @@ async def clone_server(server_id: int, db: Session = Depends(get_db), user: mode
     if not node:
         raise HTTPException(status_code=404, detail="No node assigned")
 
-    # Find a free allocation for the cloned server
-    alloc = db.query(models.Allocation).filter(
+    # Find free allocations for the cloned server
+    free_allocs = db.query(models.Allocation).filter(
         models.Allocation.node_id == srv.node_id,
         models.Allocation.server_id.is_(None),
-    ).order_by(models.Allocation.id).first()
-    clone_port = alloc.port if alloc else 0
+    ).order_by(models.Allocation.id).all()
+    if not free_allocs:
+        raise HTTPException(status_code=400, detail="No free allocations available for cloning")
 
-    clone_payload = {
-        "source_uuid": srv.uuid,
-        "docker_image": srv.docker_image,
-        "docker_network": srv.docker_network,
-        "cpu_limit": srv.cpu_limit,
-        "memory_limit": srv.memory_limit,
-        "disk_limit": srv.disk_limit,
-        "startup_command": srv.startup_command or "",
-        "port": clone_port,
-    }
-
-    try:
-        resp = await call_daemon(node, f"/api/servers/{srv.uuid}/clone", method="POST", json_data=clone_payload)
-        new_uuid = resp.get("new_uuid")
-        if not new_uuid:
-            raise HTTPException(status_code=500, detail="Daemon did not return a new UUID")
-    except HTTPException as e:
-        raise e
+    last_err = None
+    alloc = None
+    new_uuid = None
+    for alloc in free_allocs:
+        clone_payload = {
+            "source_uuid": srv.uuid,
+            "docker_image": srv.docker_image,
+            "docker_network": srv.docker_network,
+            "cpu_limit": srv.cpu_limit,
+            "memory_limit": srv.memory_limit,
+            "disk_limit": srv.disk_limit,
+            "startup_command": srv.startup_command or "",
+            "port": alloc.port,
+        }
+        try:
+            resp = await call_daemon(node, f"/api/servers/{srv.uuid}/clone", method="POST", json_data=clone_payload)
+            new_uuid = resp.get("new_uuid")
+            if not new_uuid:
+                raise HTTPException(status_code=500, detail="Daemon did not return a new UUID")
+            break
+        except HTTPException as e:
+            last_err = e
+            err_text = str(e.detail or "").lower()
+            if "already in use" not in err_text and "port is already allocated" not in err_text:
+                raise e
+            # The chosen allocation's port is occupied on the host; try the next one.
+            continue
+    else:
+        raise last_err
 
     new_server = models.Server(
         name=f"{srv.name} (Clone)",
