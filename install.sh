@@ -279,6 +279,23 @@ get_daemon_token() {
     [ -n "$t" ] && printf '%s' "$t"
 }
 
+# detect_ip prints this machine's primary LAN IP (for registering the daemon
+# in the panel). Portable across GNU hostname and the `ip` command.
+detect_ip() {
+    local ip=""
+    if command -v ip &>/dev/null; then
+        ip="$(ip route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}')"
+    fi
+    if [ -z "$ip" ] && command -v hostname &>/dev/null; then
+        ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
+    if [ -z "$ip" ] && command -v ip &>/dev/null; then
+        ip="$(ip -4 addr show 2>/dev/null | grep -oE 'inet [0-9.]+' | grep -v '127\.0\.0\.1' | awk '{print $2}' | head -1)"
+    fi
+    [ -z "$ip" ] && ip="localhost"
+    printf '%s' "$ip"
+}
+
 # ensure_secrets creates .env with strong random secrets on a fresh install.
 # On existing deployments it keeps the database + admin credentials (they are
 # baked into the running containers/DB) and only rotates JWT_SECRET + DAEMON_TOKEN.
@@ -554,15 +571,24 @@ summary() {
     echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${CYAN}  Daemon (Wings) Setup${NC}"
     echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${CYAN}Daemon API:${NC}     http://localhost:${daemon_port}"
     local daemon_token="$(get_daemon_token)"
+    local daemon_ip="${DAEMON_IP:-}"
+    if [ -z "$daemon_ip" ]; then
+        daemon_ip="$(detect_ip)"
+    fi
+    echo -e "  ${CYAN}Daemon API:${NC}     http://localhost:${daemon_port}   (on this machine)"
+    echo -e "                 ${YELLOW}http://${daemon_ip}:${daemon_port}${NC}   (from the panel / LAN)"
     if [ -n "$daemon_token" ]; then
         echo -e "  ${CYAN}Daemon Token:${NC}   $daemon_token"
     fi
-    echo -e "  ${CYAN}Test daemon:${NC}    curl -s http://localhost:${daemon_port}/api/system -H \"X-Daemon-Token: <token>\""
+    echo -e "  ${CYAN}Test daemon:${NC}    curl -s http://localhost:${daemon_port}/api/system -H \"X-Daemon-Token: $daemon_token\""
     echo ""
-    echo -e "  To register this node in the panel, create a Node in the"
-    echo -e "  panel UI using the daemon address above and the same token."
+    echo -e "  ${CYAN}To register this node in the panel${NC} (Nodes → Create Node):"
+    echo -e "    ${CYAN}Name:${NC}            Primary Node"
+    echo -e "    ${CYAN}FQDN / IP:${NC}      $daemon_ip"
+    echo -e "    ${CYAN}Daemon Port:${NC}    $daemon_port"
+    echo -e "    ${CYAN}Daemon Token:${NC}   $daemon_token"
+    echo -e "  (Make sure port $daemon_port is reachable from the panel server.)"
     echo ""
 
     echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -683,7 +709,7 @@ done
 case "$_CMD" in
     install)   fetch_latest; stop_all; install_full; wait_for_services all; show_logs; summary ;;
     panel)     install_panel; wait_for_services panel; summary ;;
-    daemon)    install_daemon; wait_for_services daemon ;;
+    daemon)    install_daemon; wait_for_services daemon; summary ;;
     update)    update; summary ;;
     download)  if [ -d "$INSTALL_DIR/wings-panel" ] && [ -f "$INSTALL_DIR/wings-panel/docker-compose.yml" ]; then
                    info "Already downloaded to $INSTALL_DIR/wings-panel"
