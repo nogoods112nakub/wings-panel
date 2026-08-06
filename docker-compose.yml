@@ -54,6 +54,20 @@ services:
     depends_on:
       - panel
 
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    container_name: panel-monitor
+    restart: always
+    environment:
+      - PANEL_URL=http://panel-master:8000
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin12345}
+      - INTERVAL=5
+    depends_on:
+      - panel
+
   daemon:
     build:
       context: .

@@ -373,9 +373,9 @@ install_full() {
 }
 
 install_panel() {
-    info "Building and starting Panel services (db, panel, frontend)..."
+    info "Building and starting Panel services (db, panel, frontend, monitor)..."
     echo ""
-    $COMPOSE up --build -d db panel frontend
+    $COMPOSE up --build -d db panel frontend monitor
     echo ""
     ok "Panel services started (daemon not included)"
 }
