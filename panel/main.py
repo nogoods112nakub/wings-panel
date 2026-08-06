@@ -104,7 +104,7 @@ def run_startup_config() -> bool:
         if node:
             create_default_allocations(db, node)
             synced = 0
-            for existing in db.query(models.Node).filter(models.Node.daemon_token != DAEMON_TOKEN).all():
+            for existing in db.query(models.Node).filter(models.Node.fqdn == DAEMON_HOST).filter(models.Node.daemon_token != DAEMON_TOKEN).all():
                 existing.daemon_token = DAEMON_TOKEN
                 synced += 1
             if synced:
