@@ -1055,6 +1055,16 @@ export default function Dashboard() {
     } catch {}
   }
 
+  const deleteNode = async (id: number, name: string) => {
+    showPopup('confirm', 'Delete Node', `Delete node "${name}"? It must have no servers assigned.`, async () => {
+      try {
+        const res = await apiFetch(`/api/nodes/${id}`, { method: 'DELETE' })
+        if (res.ok) { showPopup('success', 'Deleted', 'Node removed.'); fetchAll() }
+        else { const e = await res.json(); showPopup('error', 'Delete Failed', e.detail || 'Failed to delete node') }
+      } catch {}
+    })
+  }
+
   const createAllocations = async () => {
     try {
       const res = await apiFetch('/api/allocations', { method: 'POST', body: JSON.stringify({ node_id: allocNodeId, ip_address: allocIP, port_start: allocPortStart, count: allocCount }) })
@@ -1526,6 +1536,7 @@ export default function Dashboard() {
                           </td>
                           <td style={{ padding: '16px', textAlign: 'right' }}>
                             <button onClick={() => pingNode(n.id)} className="btn btn-outline" style={{ padding: '4px 10px', fontSize: '0.8rem' }}><Activity size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />Ping</button>
+                            <button onClick={() => deleteNode(n.id, n.name)} className="btn btn-danger" style={{ padding: '4px 10px', fontSize: '0.8rem', marginLeft: '8px' }}><Trash2 size={14} style={{ verticalAlign: 'middle' }} /></button>
                           </td>
                         </tr>
                       ))}

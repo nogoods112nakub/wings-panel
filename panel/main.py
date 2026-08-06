@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from typing import List, Optional
 from jose import jwt, JWTError
 from passlib.hash import bcrypt
@@ -86,10 +86,19 @@ app.add_middleware(
 )
 
 
+def get_primary_node(db: Session) -> models.Node:
+    return (
+        db.query(models.Node).filter(models.Node.fqdn == DAEMON_HOST).first()
+        or db.query(models.Node).filter(models.Node.is_active == True).first()
+        or get_primary_node(db)
+    )
+
+
 def run_startup_config() -> bool:
     from panel.database import SessionLocal
     db = SessionLocal()
     try:
+        db.execute(text("SELECT pg_advisory_lock(79001)"))
         fresh = create_default_admin(db)
         node = create_default_node(db)
         if node:
@@ -103,6 +112,10 @@ def run_startup_config() -> bool:
                 print(f"[PANEL] Synced {synced} node(s) to the current DAEMON_TOKEN from environment")
         return fresh
     finally:
+        try:
+            db.execute(text("SELECT pg_advisory_unlock(79001)"))
+        except Exception:
+            pass
         db.close()
 
 
@@ -248,7 +261,7 @@ def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
 # =============================================================================
 @app.get("/api/cloudflare/dns/list")
 async def list_cloudflare_dns(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     return await call_daemon(node, "/api/cloudflare/dns/list")
@@ -256,7 +269,7 @@ async def list_cloudflare_dns(db: Session = Depends(get_db), admin: models.User 
 
 @app.post("/api/cloudflare/dns/create")
 async def create_cloudflare_dns(body: dict, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     return await call_daemon(node, "/api/cloudflare/dns/create", method="POST", json_data=body)
@@ -264,7 +277,7 @@ async def create_cloudflare_dns(body: dict, db: Session = Depends(get_db), admin
 
 @app.delete("/api/cloudflare/dns/delete/{record_id}")
 async def delete_cloudflare_dns(record_id: str, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     try:
@@ -279,7 +292,7 @@ async def delete_cloudflare_dns(record_id: str, db: Session = Depends(get_db), a
 # =============================================================================
 @app.get("/api/playit/tunnel/list")
 async def list_playit_tunnels(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     return await call_daemon(node, "/api/playit/tunnel/list")
@@ -287,7 +300,7 @@ async def list_playit_tunnels(db: Session = Depends(get_db), admin: models.User 
 
 @app.post("/api/playit/tunnel/create")
 async def create_playit_tunnel(body: dict, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     return await call_daemon(node, "/api/playit/tunnel/create", method="POST", json_data=body)
@@ -295,7 +308,7 @@ async def create_playit_tunnel(body: dict, db: Session = Depends(get_db), admin:
 
 @app.delete("/api/playit/tunnel/delete/{tunnel_id}")
 async def delete_playit_tunnel(tunnel_id: str, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     try:
@@ -423,7 +436,7 @@ def nodes_summary(db: Session = Depends(get_db), user: models.User = Depends(req
 
 @app.get("/api/system/docker-networks")
 async def list_docker_networks(db: Session = Depends(get_db), user: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     return await call_daemon(node, "/api/system/networks")
@@ -431,7 +444,7 @@ async def list_docker_networks(db: Session = Depends(get_db), user: models.User 
 
 @app.post("/api/system/docker-build")
 async def build_docker_image(body: dict, db: Session = Depends(get_db), user: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     return await call_daemon(node, "/api/system/build", method="POST", json_data=body)
@@ -1973,7 +1986,7 @@ async def clone_server(server_id: int, db: Session = Depends(get_db), user: mode
 # =============================================================================
 @app.post("/api/system/networks", response_model=dict)
 async def create_docker_network(body: dict, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     return await call_daemon(node, "/api/system/networks", method="POST", json_data=body)
@@ -1981,7 +1994,7 @@ async def create_docker_network(body: dict, db: Session = Depends(get_db), admin
 
 @app.delete("/api/system/networks/{network_name}", status_code=204)
 async def delete_docker_network(network_name: str, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No nodes registered")
     try:
@@ -2430,7 +2443,7 @@ def update_panel_settings(body: schemas.PanelSettingsUpdate, db: Session = Depen
 # =============================================================================
 @app.get("/api/system/images")
 async def list_docker_images(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No node configured")
     return await call_daemon(node, "/api/system/images", method="GET")
@@ -2438,7 +2451,7 @@ async def list_docker_images(db: Session = Depends(get_db), admin: models.User =
 
 @app.delete("/api/system/images/{image_name:path}", status_code=204)
 async def remove_docker_image(image_name: str, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-    node = db.query(models.Node).first()
+    node = get_primary_node(db)
     if not node:
         raise HTTPException(status_code=404, detail="No node configured")
     await call_daemon(node, f"/api/system/images/{quote(image_name, safe='')}", method="DELETE")
