@@ -19,9 +19,14 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-pterodactyl-key-change-in-production")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24
+
+if not JWT_SECRET or JWT_SECRET == "super-secret-pterodactyl-key-change-in-production":
+    raise RuntimeError(
+        "JWT_SECRET must be set to a strong random value (run install.sh to generate .env)"
+    )
 
 def get_db():
     db = SessionLocal()

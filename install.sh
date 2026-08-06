@@ -272,7 +272,7 @@ get_daemon_token() {
     fi
     [ -f docker-compose.yml ] || return 0
     local t
-    t="$(grep -oE 'DAEMON_TOKEN=[^ $]{4,}' docker-compose.yml | head -1 | cut -d= -f2)"
+    t="$(grep -oE 'DAEMON_TOKEN=[^ ${]{4,}' docker-compose.yml | head -1 | cut -d= -f2)"
     if [ -z "$t" ]; then
         t="$(grep -oE 'DAEMON_TOKEN=\$\{DAEMON_TOKEN:-[^}]*\}' docker-compose.yml | head -1 | sed 's/.*:-//; s/}.*//')"
     fi
@@ -386,6 +386,21 @@ install_daemon() {
     $COMPOSE up --build -d --no-deps daemon
     echo ""
     ok "Daemon started (panel not included)"
+}
+
+# If the panel runs on this same host, recreate it so it picks up the current
+# .env DAEMON_TOKEN and re-syncs its node registration. This prevents the
+# panel <-> daemon link from breaking when the token changes but the panel
+# container was not recreated. No-op when the token is unchanged.
+sync_panel_token() {
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'panel-master'; then
+        info "Re-syncing panel with current daemon token..."
+        if $COMPOSE up -d --no-deps panel >/dev/null 2>&1; then
+            ok "Panel re-synced (node token matches daemon)"
+        else
+            warn "Could not re-sync panel; re-run 'install.sh panel' later."
+        fi
+    fi
 }
 
 update() {
@@ -678,7 +693,7 @@ menu() {
         case "$choice" in
             1) fetch_latest; stop_all; install_full; wait_for_services all; show_logs; summary ;;
             2) install_panel; wait_for_services panel; summary ;;
-            3) install_daemon; wait_for_services daemon ;;
+            3) install_daemon; sync_panel_token; wait_for_services daemon; summary ;;
             4) update; summary ;;
             5) download_repo; info "Next: run  ./wings-panel/install.sh  (or re-run this installer from that folder)" ;;
             6) uninstall ;;
@@ -709,7 +724,7 @@ done
 case "$_CMD" in
     install)   fetch_latest; stop_all; install_full; wait_for_services all; show_logs; summary ;;
     panel)     install_panel; wait_for_services panel; summary ;;
-    daemon)    install_daemon; wait_for_services daemon; summary ;;
+    daemon)    install_daemon; sync_panel_token; wait_for_services daemon; summary ;;
     update)    update; summary ;;
     download)  if [ -d "$INSTALL_DIR/wings-panel" ] && [ -f "$INSTALL_DIR/wings-panel/docker-compose.yml" ]; then
                    info "Already downloaded to $INSTALL_DIR/wings-panel"

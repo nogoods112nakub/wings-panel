@@ -30,7 +30,7 @@ import (
 
 // Config holds the daemon options loaded from environment variables
 var (
-	DaemonToken       = getEnv("DAEMON_TOKEN", "secure_default_wings_api_key_123456")
+	DaemonToken       = getEnv("DAEMON_TOKEN", "")
 	ServersDir        = getEnv("SERVERS_DIR", getDefaultServersDir())
 	DockerURL         = getEnv("DOCKER_URL", getDefaultDockerURL())
 	HostServersDir    = getEnv("HOST_SERVERS_DIR", ServersDir)
@@ -532,6 +532,10 @@ type BackupCreatePayload struct {
 }
 
 func main() {
+	if DaemonToken == "" {
+		log.Fatal("DAEMON_TOKEN is required (run install.sh to generate .env)")
+	}
+
 	// Create storage root directory
 	if err := os.MkdirAll(ServersDir, 0755); err != nil {
 		log.Fatalf("Failed to create servers directory: %v", err)

@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-panel_password_secure_99}
       POSTGRES_DB: panel_db
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -28,8 +28,8 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://panel_user:${POSTGRES_PASSWORD:-panel_password_secure_99}@db:5432/panel_db
-      - JWT_SECRET=${JWT_SECRET:-super-secret-pterodactyl-key-change-in-production}
-      - DAEMON_TOKEN=${DAEMON_TOKEN:-secure_default_wings_api_key_123456}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - DAEMON_TOKEN=${DAEMON_TOKEN:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin12345}
       - DAEMON_HOST=daemon-node
       - DAEMON_PORT=8080
@@ -64,7 +64,7 @@ services:
       - "8080:8080"
       - "7681-7781:7681-7781"
     environment:
-      - DAEMON_TOKEN=${DAEMON_TOKEN:-secure_default_wings_api_key_123456}
+      - DAEMON_TOKEN=${DAEMON_TOKEN:-}
       - SERVERS_DIR=/srv/daemon/servers
       - HOST_SERVERS_DIR=/srv/daemon/servers
       - DOCKER_URL=unix:///var/run/docker.sock

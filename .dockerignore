@@ -4,3 +4,8 @@ frontend/.next/
 .next/
 __pycache__/
 *.py[cod]
+.git/
+servers/
+.env
+.env.*
+*.db
